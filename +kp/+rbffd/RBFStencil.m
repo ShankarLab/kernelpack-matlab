@@ -298,6 +298,11 @@ classdef RBFStencil < handle
         end
 
         function X = stableSolve(A, B)
+            warnNear = warning('query', 'MATLAB:nearlySingularMatrix');
+            warnSing = warning('query', 'MATLAB:singularMatrix');
+            cleanupObj = onCleanup(@() restoreWarnings(warnNear, warnSing)); %#ok<NASGU>
+            warning('off', 'MATLAB:nearlySingularMatrix');
+            warning('off', 'MATLAB:singularMatrix');
             if rcond(A) < 1e-12
                 X = pinv(A) * B;
             else
@@ -314,4 +319,9 @@ end
 function d = unitMultiIndex(dim, selectdim)
     d = zeros(1, dim);
     d(selectdim) = 1;
+end
+
+function restoreWarnings(warnNear, warnSing)
+    warning(warnNear.state, 'MATLAB:nearlySingularMatrix');
+    warning(warnSing.state, 'MATLAB:singularMatrix');
 end
