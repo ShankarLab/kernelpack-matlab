@@ -116,7 +116,7 @@ t(end) = [];
 curve = [cos(t), 0.7 * sin(t)];
 surface = kp.geometry.EmbeddedSurface();
 surface.setDataSites(curve);
-surface.buildClosedGeometricModelPS(2, 0.05, size(curve, 1), 120);
+surface.buildClosedGeometricModelPS(2, 0.05, size(curve, 1));
 surface.buildLevelSetFromGeometricModel([]);
 generator = kp.nodes.DomainNodeGenerator();
 geomDomain = generator.buildDomainDescriptorFromGeometry(surface, 0.08, ...

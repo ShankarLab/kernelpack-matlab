@@ -90,7 +90,8 @@ The current `rbffd` layer includes:
 The repository also includes:
 
 - [`examples/geometry_examples.m`](examples/geometry_examples.m) for a quick run
-  through the current 2D and 3D geometry paths
+  through the current 2D and 3D geometry paths, including plots of the
+  source clouds, boundary samples, and 3D triangulated surfaces
 - [`tests/geometry_checks.m`](tests/geometry_checks.m) for lightweight geometry
   checks on normals, assembled boundary clouds, and piecewise seam handling
 - [`examples/nodes_examples.m`](examples/nodes_examples.m) for seeded box
@@ -122,7 +123,7 @@ curve = [cos(t), 0.7*sin(t)];
 
 surface = kp.geometry.EmbeddedSurface();
 surface.setDataSites(curve);
-surface.buildClosedGeometricModelPS(2, 0.05, size(curve,1), 120);
+surface.buildClosedGeometricModelPS(2, 0.05, size(curve,1));
 surface.buildLevelSetFromGeometricModel([]);
 
 generator = kp.nodes.DomainNodeGenerator();
@@ -170,12 +171,40 @@ x = [cos(t), 0.7*sin(t)];
 
 surface = kp.geometry.EmbeddedSurface();
 surface.setDataSites(x);
-surface.buildClosedGeometricModelPS(2, 0.05, size(x,1), 120);
+surface.buildClosedGeometricModelPS(2, 0.05, size(x,1));
 surface.buildLevelSetFromGeometricModel([]);
 
 xb = surface.getSampleSites();
 nrmls = surface.getNrmls();
 phi = surface.getLevelSet().Evaluate(xb);
+
+figure('Color', 'w');
+tiledlayout(1, 3);
+
+nexttile;
+plot(x(:,1), x(:,2), 'ko');
+axis equal;
+grid on;
+title('Data sites');
+
+nexttile;
+plot(xb(:,1), xb(:,2), 'b.');
+axis equal;
+grid on;
+title('Boundary samples');
+
+nexttile;
+plot(xb(:,1), xb(:,2), 'b.');
+hold on;
+idx = 1:size(xb,1);
+tips = xb(idx,:) + 0.035*nrmls(idx,:);
+for k = 1:numel(idx)
+    line([xb(idx(k),1), tips(k,1)], [xb(idx(k),2), tips(k,2)], ...
+        'Color', [0.85 0.2 0.2], 'LineWidth', 1);
+end
+axis equal;
+grid on;
+title('Boundary-sample normals');
 ```
 
 ### Open curve segment
@@ -186,7 +215,7 @@ x = [u, u.^2];
 
 segment = kp.geometry.EmbeddedSurface();
 segment.setDataSites(x);
-segment.buildGeometricModelPS(2, 0.05, size(x,1), 80);
+segment.buildGeometricModelPS(2, 0.05, size(x,1));
 
 xb = segment.getSampleSites();
 nrmls = segment.getNrmls();
@@ -208,6 +237,42 @@ surface.buildLevelSet();
 xb = surface.getBdryNodes();
 nrmls = surface.getBdryNrmls();
 corners = surface.getCornerFlags();
+cornerMask = logical(corners);
+
+figure('Color', 'w');
+tiledlayout(1, 3);
+
+nexttile;
+plot(seg1(:,1), seg1(:,2), 'k.-');
+hold on;
+plot(seg2(:,1), seg2(:,2), 'k.-');
+plot(seg3(:,1), seg3(:,2), 'k.-');
+plot(seg4(:,1), seg4(:,2), 'k.-');
+axis equal;
+grid on;
+title('Input segments');
+
+nexttile;
+plot(xb(:,1), xb(:,2), 'b.');
+hold on;
+plot(xb(cornerMask,1), xb(cornerMask,2), 'mo');
+axis equal;
+grid on;
+title('Assembled boundary');
+
+nexttile;
+plot(xb(:,1), xb(:,2), 'b.');
+hold on;
+idx = 1:size(xb,1);
+tips = xb(idx,:) + 0.035*nrmls(idx,:);
+for k = 1:numel(idx)
+    line([xb(idx(k),1), tips(k,1)], [xb(idx(k),2), tips(k,2)], ...
+        'Color', [0.85 0.2 0.2], 'LineWidth', 1);
+end
+plot(xb(cornerMask,1), xb(cornerMask,2), 'mo');
+axis equal;
+grid on;
+title('Boundary normals and corners');
 ```
 
 ### Smooth closed surface in 3D
@@ -220,11 +285,41 @@ pts = X .* r;
 
 surface = kp.geometry.EmbeddedSurface();
 surface.setDataSites(pts);
-surface.buildClosedGeometricModelPS(3, 0.2, size(pts,1), 160);
+surface.buildClosedGeometricModelPS(3, 0.2, size(pts,1));
 surface.buildLevelSetFromGeometricModel([]);
 
 xb = surface.getSampleSites();
 nrmls = surface.getNrmls();
+
+figure('Color', 'w');
+tiledlayout(1, 3);
+
+nexttile;
+plot3(pts(:,1), pts(:,2), pts(:,3), 'k.');
+axis equal;
+grid on;
+view(3);
+title('Data cloud');
+
+nexttile;
+plot3(xb(:,1), xb(:,2), xb(:,3), 'b.');
+axis equal;
+grid on;
+view(3);
+title('Boundary cloud');
+
+nexttile;
+tri = kp.geometry.MyRobustCrust(xb);
+trisurf(tri, xb(:,1), xb(:,2), xb(:,3), ...
+    'FaceColor', [0.2 0.6 0.8], 'EdgeColor', 'none', 'FaceAlpha', 0.4);
+hold on;
+plot3(xb(:,1), xb(:,2), xb(:,3), 'k.');
+axis equal;
+grid on;
+view(3);
+camlight headlight;
+lighting gouraud;
+title('Triangulated surface');
 ```
 
 ### RBF-FD assembly on a descriptor
@@ -261,7 +356,7 @@ curve = [cos(t), 0.7*sin(t)];
 
 surface = kp.geometry.EmbeddedSurface();
 surface.setDataSites(curve);
-surface.buildClosedGeometricModelPS(2, 0.05, size(curve, 1), 160);
+surface.buildClosedGeometricModelPS(2, 0.05, size(curve, 1));
 surface.buildLevelSetFromGeometricModel([]);
 
 generator = kp.nodes.DomainNodeGenerator();

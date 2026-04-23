@@ -47,6 +47,7 @@ classdef EmbeddedSurface < handle
         end
 
         function buildClosedGeometricModelPS(obj, dim, rad, Nb, Ne, eval_mode, method, supersample_fac, mode, chart_mode)
+            if nargin < 5 || isempty(Ne), Ne = []; end
             if nargin < 6 || isempty(eval_mode), eval_mode = 'eval + eval_first_ders'; end
             if nargin < 7 || isempty(method), method = 1; end
             if nargin < 8 || isempty(supersample_fac), supersample_fac = 2; end
@@ -59,6 +60,7 @@ classdef EmbeddedSurface < handle
 
             dataSites = obj.data_sites(1:obj.Nd, :);
             degree = 7;
+            Ntarget = obj.estimateEvaluationCount(dim, rad, true, Ne);
 
             if dim == 2
                 t = kp.geometry.chordLengthParam(dataSites, true);
@@ -77,12 +79,13 @@ classdef EmbeddedSurface < handle
                 obj.data_site_nrmls = dn;
 
                 if method == 1
-                    Ns = max(round(supersample_fac * 1.5 * Ne), Ne);
+                    Ns = max(round(supersample_fac * 1.5 * Ntarget), Ntarget);
                     ts = linspace(0, 1, Ns + 1).';
                     ts = ts(1:end-1);
                     ptss = obj.evalClosedCurve(ts);
                     [tanS, nrmlS] = obj.evalClosedCurveFrame(ts);
-                    keep = round(linspace(1, Ns, Ne));
+                    keep = kp.geometry.weightedSampleEliminationMIS(ptss, rad);
+                    keep = obj.ensureNonemptyKeep(keep, size(ptss, 1));
                     obj.sample_sites_s = ptss;
                     obj.sample_sites = ptss(keep, :);
                     obj.tangents1_s = tanS;
@@ -92,7 +95,7 @@ classdef EmbeddedSurface < handle
                     obj.uniform_sample_sites = obj.sample_sites;
                     obj.uniform_Nrmls = obj.Nrmls;
                 else
-                    tEval = linspace(0, 1, Ne + 1).';
+                    tEval = linspace(0, 1, Ntarget + 1).';
                     tEval = tEval(1:end-1);
                     obj.sample_sites = obj.evalClosedCurve(tEval);
                     [obj.tangents1, obj.Nrmls] = obj.evalClosedCurveFrame(tEval);
@@ -117,9 +120,9 @@ classdef EmbeddedSurface < handle
                     'weights', weights);
 
                 if method == 1
-                    Ns = max(round(supersample_fac * Ne), Ne);
+                    Ns = max(round(supersample_fac * Ntarget), Ntarget);
                 else
-                    Ns = Ne;
+                    Ns = Ntarget;
                 end
                 xyzParam = kp.geometry.fibonacciSphere(Ns);
                 uvEval = kp.geometry.cart2sphRows(xyzParam);
@@ -128,9 +131,9 @@ classdef EmbeddedSurface < handle
                 [tan1S, tan2S, nrmlS] = obj.evalClosedSurfaceFrame(uvEval);
                 if method == 1
                     keep = kp.geometry.weightedSampleEliminationMIS(ptss, rad);
-                    if nnz(keep) < max(8, floor(Ne / 2))
+                    if nnz(keep) < max(8, floor(Ntarget / 2))
                         keep = false(size(ptss, 1), 1);
-                        keep(round(linspace(1, size(ptss, 1), Ne))) = true;
+                        keep(round(linspace(1, size(ptss, 1), Ntarget))) = true;
                     end
                     obj.sample_sites_s = ptss;
                     obj.sample_sites = ptss(keep, :);
@@ -160,6 +163,7 @@ classdef EmbeddedSurface < handle
         end
 
         function buildGeometricModelPS(obj, dim, rad, Nb, Ne, eval_mode, method, supersample_fac, mode, chart_mode)
+            if nargin < 5 || isempty(Ne), Ne = []; end
             if nargin < 6 || isempty(eval_mode), eval_mode = 'eval + eval_first_ders'; end
             if nargin < 7 || isempty(method), method = 1; end
             if nargin < 8 || isempty(supersample_fac), supersample_fac = 2; end
@@ -172,6 +176,7 @@ classdef EmbeddedSurface < handle
 
             dataSites = obj.data_sites(1:obj.Nd, :);
             degree = 7;
+            Ntarget = obj.estimateEvaluationCount(dim, rad, false, Ne);
 
             if dim == 2
                 u = kp.geometry.chordLengthParam(dataSites, false);
@@ -191,11 +196,12 @@ classdef EmbeddedSurface < handle
                 obj.data_site_nrmls = dn;
 
                 if method == 1
-                    Ns = max(round(supersample_fac * 1.5 * Ne), Ne);
+                    Ns = max(round(supersample_fac * 1.5 * Ntarget), Ntarget);
                     us = linspace(0, 1, Ns).';
                     ptss = obj.evalOpenCurve(us);
                     [tanS, nrmlS] = obj.evalOpenCurveFrame(us);
-                    keep = round(linspace(1, Ns, Ne));
+                    keep = kp.geometry.weightedSampleEliminationMIS(ptss, rad);
+                    keep = obj.ensureNonemptyKeep(keep, size(ptss, 1));
                     obj.sample_sites_s = ptss;
                     obj.sample_sites = ptss(keep, :);
                     obj.tangents1_s = tanS;
@@ -205,7 +211,7 @@ classdef EmbeddedSurface < handle
                     obj.uniform_sample_sites = obj.sample_sites;
                     obj.uniform_Nrmls = obj.Nrmls;
                 else
-                    uEval = linspace(0, 1, Ne).';
+                    uEval = linspace(0, 1, Ntarget).';
                     obj.sample_sites = obj.evalOpenCurve(uEval);
                     [obj.tangents1, obj.Nrmls] = obj.evalOpenCurveFrame(uEval);
                     obj.uniform_sample_sites = obj.sample_sites;
@@ -229,12 +235,12 @@ classdef EmbeddedSurface < handle
                     'basis', basis);
 
                 if method == 1
-                    uvEval = kp.geometry.buildPlanarParametricEvalNodes2D(dataSites, max(round(supersample_fac * Ne), Ne));
-                    if size(uvEval, 1) < Ne
+                    uvEval = kp.geometry.buildPlanarParametricEvalNodes2D(dataSites, max(round(supersample_fac * Ntarget), Ntarget));
+                    if size(uvEval, 1) < Ntarget
                         uvEval = uv;
                     end
                 else
-                    uvEval = kp.geometry.buildPlanarParametricEvalNodes2D(dataSites, Ne);
+                    uvEval = kp.geometry.buildPlanarParametricEvalNodes2D(dataSites, Ntarget);
                     if isempty(uvEval)
                         uvEval = uv;
                     end
@@ -324,6 +330,61 @@ classdef EmbeddedSurface < handle
         function out = getThickTree(obj), out = obj.thick_tree; end
         function out = getLevelSet(obj), out = obj.levelSet; end
         function out = getN(obj), out = obj.N; end
+    end
+
+    methods (Access = private)
+        function keep = ensureNonemptyKeep(~, keep, nPts)
+            if ~any(keep) && nPts > 0
+                keep = false(nPts, 1);
+                keep(1) = true;
+            end
+        end
+
+        function Ntarget = estimateEvaluationCount(obj, dim, rad, isClosed, NeHint)
+            if ~isempty(NeHint)
+                Ntarget = max(ceil(double(NeHint)), 1);
+                return;
+            end
+
+            X = obj.data_sites(1:obj.Nd, :);
+            if dim == 2
+                if isClosed
+                    measure = obj.closedPolylineLength(X);
+                else
+                    measure = obj.openPolylineLength(X);
+                end
+                Ntarget = max(ceil(measure / max(rad, eps)), 8);
+            elseif dim == 3
+                mins = min(X, [], 1);
+                maxs = max(X, [], 1);
+                ext = max(maxs - mins, eps);
+                area = 2 * (ext(1) * ext(2) + ext(1) * ext(3) + ext(2) * ext(3));
+                if ~isClosed
+                    area = 0.5 * area;
+                end
+                Ntarget = max(ceil(area / max(rad * rad, eps)), 16);
+            else
+                error('EmbeddedSurface:BadDimension', 'Unsupported dimension.');
+            end
+        end
+
+        function L = closedPolylineLength(~, X)
+            if size(X, 1) < 2
+                L = 0;
+                return;
+            end
+            shifted = X([2:end, 1], :);
+            L = sum(sqrt(sum((shifted - X) .^ 2, 2)));
+        end
+
+        function L = openPolylineLength(~, X)
+            if size(X, 1) < 2
+                L = 0;
+                return;
+            end
+            dX = diff(X, 1, 1);
+            L = sum(sqrt(sum(dX .^ 2, 2)));
+        end
     end
 
     methods (Access = private)
