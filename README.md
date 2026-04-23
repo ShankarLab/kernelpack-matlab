@@ -105,31 +105,38 @@ The repository also includes:
 ### Seeded box Poisson nodes
 
 ```matlab
+% Generate a seeded fixed-radius Poisson cloud directly in a box.
 [x, info] = kp.nodes.generatePoissonNodesInBox(0.08, [0 0 0], [1 1 1], ...
     'Seed', 17, 'StripCount', 5);
 
+% Use the higher-level generator wrapper for the same task.
 generator = kp.nodes.DomainNodeGenerator();
 generator.generatePoissonNodes(0.08, [0 0 0], [1 1 1], 'Seed', 17, 'StripCount', 5);
 
+% Retrieve the raw interior cloud from the generator state.
 raw_nodes = generator.getRawPoissonInteriorNodes();
 ```
 
 ### Geometry-clipped interior nodes
 
 ```matlab
+% Define a smooth closed planar curve from scattered boundary data.
 t = linspace(0, 2*pi, 50).';
 t(end) = [];
 curve = [cos(t), 0.7*sin(t)];
 
+% Build the stacked parametric-plus-level-set representation.
 surface = kp.geometry.EmbeddedSurface();
 surface.setDataSites(curve);
 surface.buildClosedGeometricModelPS(2, 0.05, size(curve,1));
 surface.buildLevelSetFromGeometricModel([]);
 
+% Generate a box cloud and clip it against the geometry.
 generator = kp.nodes.DomainNodeGenerator();
 generator.generateInteriorNodesFromGeometry(surface, 0.08, ...
     'Seed', 17, 'StripCount', 5);
 
+% Pull out the clipped interior nodes, the raw box cloud, or a full descriptor.
 interior_nodes = generator.getInteriorNodes();
 raw_box_nodes = generator.getRawPoissonInteriorNodes();
 descriptor = generator.buildDomainDescriptorFromGeometry(surface, 0.08, ...
@@ -145,6 +152,7 @@ inside the band, and the level-set clearance is based on the smallest radius
 being used.
 
 ```matlab
+% Enable a finer spacing in a band near the boundary.
 generator = kp.nodes.DomainNodeGenerator();
 generator.generateInteriorNodesFromGeometry(surface, 0.08, ...
     'Seed', 17, 'StripCount', 5, ...
@@ -156,6 +164,7 @@ generator.generateInteriorNodesFromGeometry(surface, 0.08, ...
 For larger clouds, clipping can also evaluate the level set in parallel:
 
 ```matlab
+% Evaluate the level set in chunks and farm large jobs out to parfor.
 [interior_nodes, keep_mask, phi] = kp.nodes.clipPointsByGeometry( ...
     raw_box_nodes, surface, 'UseParallel', true, ...
     'ChunkSize', 5000, 'MinParallelPoints', 20000, ...
@@ -165,19 +174,23 @@ For larger clouds, clipping can also evaluate the level set in parallel:
 ### Smooth closed curve
 
 ```matlab
+% Start from data sites on a smooth closed planar boundary.
 t = linspace(0, 2*pi, 40).';
 t(end) = [];
 x = [cos(t), 0.7*sin(t)];
 
+% Build the geometric model and its matching level set.
 surface = kp.geometry.EmbeddedSurface();
 surface.setDataSites(x);
 surface.buildClosedGeometricModelPS(2, 0.05, size(x,1));
 surface.buildLevelSetFromGeometricModel([]);
 
+% Extract boundary samples, normals, and the implicit values at those samples.
 xb = surface.getSampleSites();
 nrmls = surface.getNrmls();
 phi = surface.getLevelSet().Evaluate(xb);
 
+% Plot the input sites, the sampled boundary, and the sampled normals.
 figure('Color', 'w');
 tiledlayout(1, 3);
 
@@ -210,6 +223,7 @@ title('Boundary-sample normals');
 ### Open curve segment
 
 ```matlab
+% Sample an open planar segment and build a nonperiodic parametric model.
 u = linspace(0, 1, 30).';
 x = [u, u.^2];
 
@@ -224,6 +238,7 @@ nrmls = segment.getNrmls();
 ### Piecewise-smooth planar boundary
 
 ```matlab
+% Build a closed piecewise-smooth boundary from four segments.
 seg1 = [linspace(0,1,20).', zeros(20,1)];
 seg2 = [ones(20,1), linspace(0,1,20).'];
 seg3 = [linspace(1,0,20).', ones(20,1)];
@@ -239,6 +254,7 @@ nrmls = surface.getBdryNrmls();
 corners = surface.getCornerFlags();
 cornerMask = logical(corners);
 
+% Plot the original segments, the assembled boundary cloud, and the corner-aware normals.
 figure('Color', 'w');
 tiledlayout(1, 3);
 
@@ -278,11 +294,13 @@ title('Boundary normals and corners');
 ### Smooth closed surface in 3D
 
 ```matlab
+% Start from a smooth closed 3D point cloud.
 X = kp.geometry.fibonacciSphere(120);
 uv = kp.geometry.cart2sphRows(X);
 r = 1 + 0.15*cos(3*uv(:,1)).*cos(2*uv(:,2));
 pts = X .* r;
 
+% Build the surface model and evaluate a boundary cloud on it.
 surface = kp.geometry.EmbeddedSurface();
 surface.setDataSites(pts);
 surface.buildClosedGeometricModelPS(3, 0.2, size(pts,1));
@@ -291,6 +309,7 @@ surface.buildLevelSetFromGeometricModel([]);
 xb = surface.getSampleSites();
 nrmls = surface.getNrmls();
 
+% Show the input cloud, the sampled boundary cloud, and a reconstructed triangulation.
 figure('Color', 'w');
 tiledlayout(1, 3);
 
@@ -325,6 +344,7 @@ title('Triangulated surface');
 ### RBF-FD assembly on a descriptor
 
 ```matlab
+% Build a descriptor directly from a small Cartesian grid.
 [Xg, Yg] = ndgrid(linspace(-1, 1, 5), linspace(-1, 1, 5));
 X = [Xg(:), Yg(:)];
 
@@ -333,6 +353,7 @@ domain.setNodes(X, zeros(0, 2), zeros(0, 2));
 domain.setSepRad(0.5);
 domain.buildStructs();
 
+% Describe the stencil and assemble a Laplacian on the descriptor.
 sp = kp.rbffd.StencilProperties( ...
     'n', 9, 'dim', 2, 'ell', 2, ...
     'spline_degree', 3, ...
@@ -350,6 +371,7 @@ L = assembler.getOp();
 High-level stencil selection:
 
 ```matlab
+% Build a smooth geometry and convert it into a full domain descriptor.
 t = linspace(0, 2*pi, 80).';
 t(end) = [];
 curve = [cos(t), 0.7*sin(t)];
@@ -367,6 +389,7 @@ domain = generator.buildDomainDescriptorFromGeometry(surface, 0.08, ...
     'OuterFractionOfh', 0.5, ...
     'OuterRefinementZoneSizeAsMultipleOfh', 2.0);
 
+% Ask the code to choose stencil parameters from the target accuracy.
 sp = kp.rbffd.StencilProperties.fromAccuracy( ...
     'Operator', 'lap', ...
     'ConvergenceOrder', 3, ...
@@ -376,10 +399,12 @@ sp = kp.rbffd.StencilProperties.fromAccuracy( ...
     'pointSet', 'interior_boundary');
 op = kp.rbffd.OpProperties('recordStencils', true);
 
+% Assemble the interior Laplacian.
 lapAssembler = kp.rbffd.FDDiffOp(@() kp.rbffd.RBFStencil());
 lapAssembler.AssembleOp(domain, 'lap', sp, op);
 L = lapAssembler.getOp();
 
+% Assemble a boundary operator with one row per boundary node.
 bcSp = kp.rbffd.StencilProperties.fromAccuracy( ...
     'Operator', 'bc', ...
     'ConvergenceOrder', 3, ...
@@ -406,6 +431,7 @@ with one row per boundary point and one column per total node.
 Low-level stencil selection:
 
 ```matlab
+% Supply stencil size and polynomial degree explicitly when you want manual control.
 sp = kp.rbffd.StencilProperties( ...
     'n', 25, ...
     'dim', 2, ...
