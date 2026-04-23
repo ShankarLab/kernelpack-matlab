@@ -121,7 +121,7 @@ classdef EmbeddedSurface < handle
                 ptss = obj.evalClosedSurface(uvEval);
                 [tan1S, tan2S, nrmlS] = obj.evalClosedSurfaceFrame(uvEval);
                 if method == 1
-                    keep = obj.greedySeparationMask(ptss, rad);
+                    keep = kp.geometry.weightedSampleEliminationMIS(ptss, rad);
                     if nnz(keep) < max(8, floor(Ne / 2))
                         keep = false(size(ptss, 1), 1);
                         keep(round(linspace(1, size(ptss, 1), Ne))) = true;
@@ -315,20 +315,6 @@ classdef EmbeddedSurface < handle
     end
 
     methods (Access = private)
-        function keep = greedySeparationMask(~, X, rad)
-            keep = false(size(X, 1), 1);
-            for i = 1:size(X, 1)
-                if ~any(keep)
-                    keep(i) = true;
-                else
-                    d = sqrt(sum((X(keep, :) - X(i, :)).^2, 2));
-                    if all(d > rad)
-                        keep(i) = true;
-                    end
-                end
-            end
-        end
-
         function x = evalClosedCurve(obj, t)
             tw = kp.geometry.wrapPeriodicParameter(t(:));
             theta = 2 * pi * tw;

@@ -30,6 +30,7 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
             if nargin < 6 || isempty(supersample_fac), supersample_fac = 2; end
             if nargin < 7 || isempty(mode), mode = 2; end
 
+            nSeg = numel(bdry_segments);
             obj.segments = cell(size(bdry_segments));
             obj.segment_map = zeros(0, 1);
             obj.corner_flags = zeros(0, 1);
@@ -39,36 +40,19 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
                 radius = min(radius(:));
             end
 
-            for k = 1:numel(bdry_segments)
-                boundary = kp.geometry.EmbeddedSurface();
-                boundary.setDataSites(bdry_segments{k});
-                boundary.setSampleSites(bdry_segments{k});
-                boundary.computeBoundingBox();
-                box = boundary.getBoundingBox();
-                if dim == 2
-                    w = abs(max(box(:, 1)) - min(box(:, 1)));
-                    h = abs(max(box(:, 2)) - min(box(:, 2)));
-                    bdry_size = 2 * (w + h);
-                    seg_N = max(8, round(bdry_size / radius));
-                    boundary.buildGeometricModelPS(dim, radius, size(bdry_segments{k}, 1), seg_N, ...
-                        'eval + eval_first_ders', method, supersample_fac, mode, 1);
-                elseif dim == 3
-                    w = abs(max(box(:, 1)) - min(box(:, 1)));
-                    h = abs(max(box(:, 2)) - min(box(:, 2)));
-                    l = abs(max(box(:, 3)) - min(box(:, 3)));
-                    bdry_size = 2 * (w * h + h * l + l * w);
-                    seg_N = max(16, round(bdry_size / max(radius^2, eps)));
-                    boundary.buildGeometricModelPS(dim, radius, size(bdry_segments{k}, 1), seg_N, ...
-                        'eval + eval_first_ders', method, supersample_fac, mode, 1);
-                else
-                    error('PiecewiseSmoothEmbeddedSurface:NotImplemented', ...
-                        'Unsupported segment dimension.');
+            localSegments = cell(size(bdry_segments));
+            if obj.shouldUseParfor(nSeg)
+                parfor k = 1:nSeg
+                    localSegments{k} = kp.geometry.PiecewiseSmoothEmbeddedSurface.buildSegmentModel( ...
+                        bdry_segments{k}, flip_normal(k), dim, radius, method, supersample_fac, mode);
                 end
-                if flip_normal(k)
-                    boundary.flipNormals();
+            else
+                for k = 1:nSeg
+                    localSegments{k} = kp.geometry.PiecewiseSmoothEmbeddedSurface.buildSegmentModel( ...
+                        bdry_segments{k}, flip_normal(k), dim, radius, method, supersample_fac, mode);
                 end
-                obj.segments{k} = boundary;
             end
+            obj.segments = localSegments;
 
             counts = zeros(numel(obj.segments), 1);
             for k = 1:numel(obj.segments)
@@ -163,6 +147,17 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
     end
 
     methods (Access = private)
+        function tf = shouldUseParfor(~, nSeg)
+            tf = false;
+            if nSeg < 2
+                return;
+            end
+            if ~license('test', 'Distrib_Computing_Toolbox')
+                return;
+            end
+            tf = true;
+        end
+
         function keep = dedupMask(~, X, tol)
             keep = true(size(X, 1), 1);
             for i = 1:size(X, 1)
@@ -172,6 +167,38 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
                 d = sqrt(sum((X(i+1:end, :) - X(i, :)).^2, 2));
                 dup = find(d <= tol) + i;
                 keep(dup) = false;
+            end
+        end
+    end
+
+    methods (Static, Access = private)
+        function boundary = buildSegmentModel(bdryPts, flipNormal, dim, radius, method, supersample_fac, mode)
+            boundary = kp.geometry.EmbeddedSurface();
+            boundary.setDataSites(bdryPts);
+            boundary.setSampleSites(bdryPts);
+            boundary.computeBoundingBox();
+            box = boundary.getBoundingBox();
+            if dim == 2
+                w = abs(max(box(:, 1)) - min(box(:, 1)));
+                h = abs(max(box(:, 2)) - min(box(:, 2)));
+                bdry_size = 2 * (w + h);
+                seg_N = max(8, round(bdry_size / radius));
+                boundary.buildGeometricModelPS(dim, radius, size(bdryPts, 1), seg_N, ...
+                    'eval + eval_first_ders', method, supersample_fac, mode, 1);
+            elseif dim == 3
+                w = abs(max(box(:, 1)) - min(box(:, 1)));
+                h = abs(max(box(:, 2)) - min(box(:, 2)));
+                l = abs(max(box(:, 3)) - min(box(:, 3)));
+                bdry_size = 2 * (w * h + h * l + l * w);
+                seg_N = max(16, round(bdry_size / max(radius^2, eps)));
+                boundary.buildGeometricModelPS(dim, radius, size(bdryPts, 1), seg_N, ...
+                    'eval + eval_first_ders', method, supersample_fac, mode, 1);
+            else
+                error('PiecewiseSmoothEmbeddedSurface:NotImplemented', ...
+                    'Unsupported segment dimension.');
+            end
+            if flipNormal
+                boundary.flipNormals();
             end
         end
     end
