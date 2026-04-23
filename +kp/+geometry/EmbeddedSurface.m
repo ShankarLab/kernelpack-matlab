@@ -27,6 +27,7 @@ classdef EmbeddedSurface < handle
         tallTree struct = struct('Points', [])
         thick_tree struct = struct('Points', [])
         levelSet kp.geometry.RBFLevelSet = kp.geometry.RBFLevelSet()
+        tangent_step (1,1) double = 1e-5
     end
 
     methods
@@ -46,52 +47,105 @@ classdef EmbeddedSurface < handle
         end
 
         function buildClosedGeometricModelPS(obj, dim, rad, Nb, Ne, ~, method, supersample_fac, ~, ~)
-            if dim ~= 2
-                error('EmbeddedSurface:NotImplemented', ...
-                    'Clean restart currently implements buildClosedGeometricModelPS for dim=2 first.');
-            end
-
             obj.sep_rad = rad;
             obj.Nd = min(Nb, size(obj.data_sites, 1));
             obj.surf_dim = dim - 1;
 
             dataSites = obj.data_sites(1:obj.Nd, :);
-            t = kp.geometry.chordLengthParam(dataSites, true);
-            theta = 2 * pi * t;
-            [r, ~] = kp.geometry.periodicChordDistance(theta, theta);
             degree = 7;
-            K = kp.geometry.phsKernel(r, degree);
-            reg = 1e-12 * max(1.0, max(abs(K), [], 'all'));
-            weights = (K + reg * eye(size(K))) \ dataSites;
 
-            obj.geom_model = struct( ...
-                'type', 'closed-curve-sbf', ...
-                'degree', degree, ...
-                'theta', theta, ...
-                'weights', weights);
+            if dim == 2
+                t = kp.geometry.chordLengthParam(dataSites, true);
+                theta = 2 * pi * t;
+                [r, ~] = kp.geometry.periodicChordDistance(theta, theta);
+                K = kp.geometry.phsKernel(r, degree);
+                reg = 1e-12 * max(1.0, max(abs(K), [], 'all'));
+                weights = (K + reg * eye(size(K))) \ dataSites;
 
-            if method == 1
-                Ns = max(round(supersample_fac * 1.5 * Ne), Ne);
-                ts = linspace(0, 1, Ns + 1).';
-                ts = ts(1:end-1);
-                ptss = obj.evalClosedCurve(ts);
-                [tanS, nrmlS] = obj.evalClosedCurveFrame(ts);
-                keep = round(linspace(1, Ns, Ne));
-                obj.sample_sites_s = ptss;
-                obj.sample_sites = ptss(keep, :);
-                obj.tangents1_s = tanS;
-                obj.Nrmls_s = nrmlS;
-                obj.tangents1 = tanS(keep, :);
-                obj.Nrmls = nrmlS(keep, :);
+                obj.geom_model = struct( ...
+                    'type', 'closed-curve-sbf', ...
+                    'degree', degree, ...
+                    'theta', theta, ...
+                    'weights', weights);
+                [~, dn] = obj.evalClosedCurveFrame(t);
+                obj.data_site_nrmls = dn;
+
+                if method == 1
+                    Ns = max(round(supersample_fac * 1.5 * Ne), Ne);
+                    ts = linspace(0, 1, Ns + 1).';
+                    ts = ts(1:end-1);
+                    ptss = obj.evalClosedCurve(ts);
+                    [tanS, nrmlS] = obj.evalClosedCurveFrame(ts);
+                    keep = round(linspace(1, Ns, Ne));
+                    obj.sample_sites_s = ptss;
+                    obj.sample_sites = ptss(keep, :);
+                    obj.tangents1_s = tanS;
+                    obj.Nrmls_s = nrmlS;
+                    obj.tangents1 = tanS(keep, :);
+                    obj.Nrmls = nrmlS(keep, :);
+                    obj.uniform_sample_sites = obj.sample_sites;
+                    obj.uniform_Nrmls = obj.Nrmls;
+                else
+                    tEval = linspace(0, 1, Ne + 1).';
+                    tEval = tEval(1:end-1);
+                    obj.sample_sites = obj.evalClosedCurve(tEval);
+                    [obj.tangents1, obj.Nrmls] = obj.evalClosedCurveFrame(tEval);
+                    obj.uniform_sample_sites = obj.sample_sites;
+                    obj.uniform_Nrmls = obj.Nrmls;
+                end
+            elseif dim == 3
+                center = mean(dataSites, 1);
+                local = dataSites - center;
+                uvw = kp.geometry.cart2sphRows(local);
+                uv = uvw(:, 1:2);
+                unitCenters = local ./ max(uvw(:, 3), eps);
+                [r, ~] = kp.geometry.sphereChordDistance(unitCenters, unitCenters);
+                K = kp.geometry.phsKernel(r, degree);
+                reg = 1e-12 * max(1.0, max(abs(K), [], 'all'));
+                weights = (K + reg * eye(size(K))) \ dataSites;
+                obj.geom_model = struct( ...
+                    'type', 'closed-surface-sbf', ...
+                    'degree', degree, ...
+                    'center', center, ...
+                    'unitCenters', unitCenters, ...
+                    'weights', weights);
+
+                if method == 1
+                    Ns = max(round(supersample_fac * Ne), Ne);
+                else
+                    Ns = Ne;
+                end
+                xyzParam = kp.geometry.fibonacciSphere(Ns);
+                uvEval = kp.geometry.cart2sphRows(xyzParam);
+                uvEval = uvEval(:, 1:2);
+                ptss = obj.evalClosedSurface(uvEval);
+                [tan1S, tan2S, nrmlS] = obj.evalClosedSurfaceFrame(uvEval);
+                if method == 1
+                    keep = obj.greedySeparationMask(ptss, rad);
+                    if nnz(keep) < max(8, floor(Ne / 2))
+                        keep = false(size(ptss, 1), 1);
+                        keep(round(linspace(1, size(ptss, 1), Ne))) = true;
+                    end
+                    obj.sample_sites_s = ptss;
+                    obj.sample_sites = ptss(keep, :);
+                    obj.tangents1_s = tan1S;
+                    obj.tangents2_s = tan2S;
+                    obj.Nrmls_s = nrmlS;
+                    obj.tangents1 = tan1S(keep, :);
+                    obj.tangents2 = tan2S(keep, :);
+                    obj.Nrmls = nrmlS(keep, :);
+                else
+                    obj.sample_sites = ptss;
+                    obj.tangents1 = tan1S;
+                    obj.tangents2 = tan2S;
+                    obj.Nrmls = nrmlS;
+                end
                 obj.uniform_sample_sites = obj.sample_sites;
                 obj.uniform_Nrmls = obj.Nrmls;
+                [~, ~, dn] = obj.evalClosedSurfaceFrame(uv);
+                obj.data_site_nrmls = dn;
             else
-                tEval = linspace(0, 1, Ne + 1).';
-                tEval = tEval(1:end-1);
-                obj.sample_sites = obj.evalClosedCurve(tEval);
-                [obj.tangents1, obj.Nrmls] = obj.evalClosedCurveFrame(tEval);
-                obj.uniform_sample_sites = obj.sample_sites;
-                obj.uniform_Nrmls = obj.Nrmls;
+                error('EmbeddedSurface:BadDimension', 'Unsupported dimension.');
             end
 
             obj.N = size(obj.sample_sites, 1);
@@ -100,51 +154,91 @@ classdef EmbeddedSurface < handle
         end
 
         function buildGeometricModelPS(obj, dim, rad, Nb, Ne, ~, method, supersample_fac, ~, ~)
-            if dim ~= 2
-                error('EmbeddedSurface:NotImplemented', ...
-                    'Clean restart currently implements buildGeometricModelPS for dim=2 first.');
-            end
-
             obj.sep_rad = rad;
             obj.Nd = min(Nb, size(obj.data_sites, 1));
             obj.surf_dim = dim - 1;
 
             dataSites = obj.data_sites(1:obj.Nd, :);
-            u = kp.geometry.chordLengthParam(dataSites, false);
             degree = 7;
-            K = kp.geometry.phsKernel(kp.geometry.distanceMatrix(u, u), degree);
-            P = [ones(numel(u), 1), u];
-            reg = 1e-12 * max(1.0, max(abs(K), [], 'all'));
-            A = [K + reg * eye(numel(u)), P; P.', zeros(2, 2)];
-            coeffs = A \ [dataSites; zeros(2, 2)];
 
-            obj.geom_model = struct( ...
-                'type', 'open-curve-rbf', ...
-                'degree', degree, ...
-                'u', u, ...
-                'rbfWeights', coeffs(1:numel(u), :), ...
-                'polyCoeffs', coeffs(numel(u) + 1:end, :));
+            if dim == 2
+                u = kp.geometry.chordLengthParam(dataSites, false);
+                K = kp.geometry.phsKernel(kp.geometry.distanceMatrix(u, u), degree);
+                P = [ones(numel(u), 1), u];
+                reg = 1e-12 * max(1.0, max(abs(K), [], 'all'));
+                A = [K + reg * eye(numel(u)), P; P.', zeros(2, 2)];
+                coeffs = A \ [dataSites; zeros(2, 2)];
 
-            if method == 1
-                Ns = max(round(supersample_fac * 1.5 * Ne), Ne);
-                us = linspace(0, 1, Ns).';
-                ptss = obj.evalOpenCurve(us);
-                [tanS, nrmlS] = obj.evalOpenCurveFrame(us);
-                keep = round(linspace(1, Ns, Ne));
-                obj.sample_sites_s = ptss;
-                obj.sample_sites = ptss(keep, :);
-                obj.tangents1_s = tanS;
-                obj.Nrmls_s = nrmlS;
-                obj.tangents1 = tanS(keep, :);
-                obj.Nrmls = nrmlS(keep, :);
+                obj.geom_model = struct( ...
+                    'type', 'open-curve-rbf', ...
+                    'degree', degree, ...
+                    'u', u, ...
+                    'rbfWeights', coeffs(1:numel(u), :), ...
+                    'polyCoeffs', coeffs(numel(u) + 1:end, :));
+                [~, dn] = obj.evalOpenCurveFrame(u);
+                obj.data_site_nrmls = dn;
+
+                if method == 1
+                    Ns = max(round(supersample_fac * 1.5 * Ne), Ne);
+                    us = linspace(0, 1, Ns).';
+                    ptss = obj.evalOpenCurve(us);
+                    [tanS, nrmlS] = obj.evalOpenCurveFrame(us);
+                    keep = round(linspace(1, Ns, Ne));
+                    obj.sample_sites_s = ptss;
+                    obj.sample_sites = ptss(keep, :);
+                    obj.tangents1_s = tanS;
+                    obj.Nrmls_s = nrmlS;
+                    obj.tangents1 = tanS(keep, :);
+                    obj.Nrmls = nrmlS(keep, :);
+                    obj.uniform_sample_sites = obj.sample_sites;
+                    obj.uniform_Nrmls = obj.Nrmls;
+                else
+                    uEval = linspace(0, 1, Ne).';
+                    obj.sample_sites = obj.evalOpenCurve(uEval);
+                    [obj.tangents1, obj.Nrmls] = obj.evalOpenCurveFrame(uEval);
+                    obj.uniform_sample_sites = obj.sample_sites;
+                    obj.uniform_Nrmls = obj.Nrmls;
+                end
+            elseif dim == 3
+                uv = kp.geometry.buildPlanarParametricNodes2D(dataSites, obj.Nd, 0, 1);
+                K = kp.geometry.phsKernel(kp.geometry.distanceMatrix(uv, uv), degree);
+                P = [ones(size(uv, 1), 1), uv];
+                reg = 1e-12 * max(1.0, max(abs(K), [], 'all'));
+                A = [K + reg * eye(size(uv, 1)), P; P.', zeros(3, 3)];
+                coeffs = A \ [dataSites; zeros(3, 3)];
+                [~, origin, basis] = kp.geometry.projectToBestFitPlane(dataSites);
+                obj.geom_model = struct( ...
+                    'type', 'surface-patch-rbf', ...
+                    'degree', degree, ...
+                    'uv', uv, ...
+                    'rbfWeights', coeffs(1:size(uv, 1), :), ...
+                    'polyCoeffs', coeffs(size(uv, 1) + 1:end, :), ...
+                    'origin', origin, ...
+                    'basis', basis);
+
+                if method == 1
+                    uvEval = kp.geometry.buildPlanarParametricEvalNodes2D(dataSites, max(round(supersample_fac * Ne), Ne));
+                    if size(uvEval, 1) < Ne
+                        uvEval = uv;
+                    end
+                else
+                    uvEval = kp.geometry.buildPlanarParametricEvalNodes2D(dataSites, Ne);
+                    if isempty(uvEval)
+                        uvEval = uv;
+                    end
+                end
+                ptss = obj.evalOpenSurface(uvEval);
+                [tan1S, tan2S, nrmlS] = obj.evalOpenSurfaceFrame(uvEval);
+                obj.sample_sites = ptss;
+                obj.tangents1 = tan1S;
+                obj.tangents2 = tan2S;
+                obj.Nrmls = nrmlS;
                 obj.uniform_sample_sites = obj.sample_sites;
                 obj.uniform_Nrmls = obj.Nrmls;
+                [~, ~, dn] = obj.evalOpenSurfaceFrame(uv);
+                obj.data_site_nrmls = dn;
             else
-                uEval = linspace(0, 1, Ne).';
-                obj.sample_sites = obj.evalOpenCurve(uEval);
-                [obj.tangents1, obj.Nrmls] = obj.evalOpenCurveFrame(uEval);
-                obj.uniform_sample_sites = obj.sample_sites;
-                obj.uniform_Nrmls = obj.Nrmls;
+                error('EmbeddedSurface:BadDimension', 'Unsupported dimension.');
             end
 
             obj.N = size(obj.sample_sites, 1);
@@ -160,9 +254,17 @@ classdef EmbeddedSurface < handle
                 if strcmp(obj.geom_model.type, 'closed-curve-sbf')
                     pts = obj.evalClosedCurve(lambda);
                     [~, nrmls] = obj.evalClosedCurveFrame(lambda);
+                elseif strcmp(obj.geom_model.type, 'closed-surface-sbf')
+                    pts = obj.evalClosedSurface(lambda);
+                    [~, ~, nrmls] = obj.evalClosedSurfaceFrame(lambda);
                 else
-                    pts = obj.evalOpenCurve(lambda);
-                    [~, nrmls] = obj.evalOpenCurveFrame(lambda);
+                    if obj.surf_dim == 1
+                        pts = obj.evalOpenCurve(lambda);
+                        [~, nrmls] = obj.evalOpenCurveFrame(lambda);
+                    else
+                        pts = obj.evalOpenSurface(lambda);
+                        [~, ~, nrmls] = obj.evalOpenSurfaceFrame(lambda);
+                    end
                 end
             end
             obj.levelSet = kp.geometry.RBFLevelSet();
@@ -213,6 +315,20 @@ classdef EmbeddedSurface < handle
     end
 
     methods (Access = private)
+        function keep = greedySeparationMask(~, X, rad)
+            keep = false(size(X, 1), 1);
+            for i = 1:size(X, 1)
+                if ~any(keep)
+                    keep(i) = true;
+                else
+                    d = sqrt(sum((X(keep, :) - X(i, :)).^2, 2));
+                    if all(d > rad)
+                        keep(i) = true;
+                    end
+                end
+            end
+        end
+
         function x = evalClosedCurve(obj, t)
             tw = kp.geometry.wrapPeriodicParameter(t(:));
             theta = 2 * pi * tw;
@@ -234,7 +350,7 @@ classdef EmbeddedSurface < handle
                 dphi(r == 0) = 0;
             end
             xt = (2 * pi) * (dphi * obj.geom_model.weights);
-            n = kp.geometry.normalizeRows([-xt(:, 2), xt(:, 1)]);
+            n = kp.geometry.normalizeRows([xt(:, 2), -xt(:, 1)]);
         end
 
         function x = evalOpenCurve(obj, u)
@@ -255,7 +371,55 @@ classdef EmbeddedSurface < handle
             end
             dphi(r == 0 & degree > 1) = 0;
             xt = dphi * obj.geom_model.rbfWeights + repmat(obj.geom_model.polyCoeffs(2, :), size(u, 1), 1);
-            n = kp.geometry.normalizeRows([-xt(:, 2), xt(:, 1)]);
+            n = kp.geometry.normalizeRows([xt(:, 2), -xt(:, 1)]);
+        end
+
+        function x = evalClosedSurface(obj, uv)
+            unitQuery = [cos(uv(:, 2)) .* cos(uv(:, 1)), ...
+                         cos(uv(:, 2)) .* sin(uv(:, 1)), ...
+                         sin(uv(:, 2))];
+            [r, ~] = kp.geometry.sphereChordDistance(unitQuery, obj.geom_model.unitCenters);
+            K = kp.geometry.phsKernel(r, obj.geom_model.degree);
+            x = K * obj.geom_model.weights;
+        end
+
+        function [tu, tv, n] = evalClosedSurfaceFrame(obj, uv)
+            h = obj.tangent_step;
+            uvUp = uv; uvUm = uv;
+            uvUp(:, 1) = uv(:, 1) + h;
+            uvUm(:, 1) = uv(:, 1) - h;
+            xp = obj.evalClosedSurface(uvUp);
+            xm = obj.evalClosedSurface(uvUm);
+            tu = (xp - xm) ./ (2 * h);
+
+            uvVp = uv; uvVm = uv;
+            uvVp(:, 2) = min(uv(:, 2) + h, pi/2);
+            uvVm(:, 2) = max(uv(:, 2) - h, -pi/2);
+            xp = obj.evalClosedSurface(uvVp);
+            xm = obj.evalClosedSurface(uvVm);
+            dv = max(uvVp(:, 2) - uvVm(:, 2), eps);
+            tv = (xp - xm) ./ dv;
+            n = kp.geometry.normalizeRows(cross(tu, tv, 2));
+        end
+
+        function x = evalOpenSurface(obj, uv)
+            K = kp.geometry.phsKernel(kp.geometry.distanceMatrix(uv, obj.geom_model.uv), obj.geom_model.degree);
+            x = K * obj.geom_model.rbfWeights + [ones(size(uv, 1), 1), uv] * obj.geom_model.polyCoeffs;
+        end
+
+        function [tu, tv, n] = evalOpenSurfaceFrame(obj, uv)
+            diffU = uv(:, 1) - obj.geom_model.uv(:, 1).';
+            diffV = uv(:, 2) - obj.geom_model.uv(:, 2).';
+            r = sqrt(diffU.^2 + diffV.^2);
+            degree = obj.geom_model.degree;
+            dphi = degree * r .^ max(degree - 2, 0);
+            if degree == 1
+                dphi = ones(size(r));
+            end
+            dphi(r == 0 & degree > 1) = 0;
+            tu = (dphi .* diffU) * obj.geom_model.rbfWeights + repmat(obj.geom_model.polyCoeffs(2, :), size(uv, 1), 1);
+            tv = (dphi .* diffV) * obj.geom_model.rbfWeights + repmat(obj.geom_model.polyCoeffs(3, :), size(uv, 1), 1);
+            n = kp.geometry.normalizeRows(cross(tu, tv, 2));
         end
     end
 end

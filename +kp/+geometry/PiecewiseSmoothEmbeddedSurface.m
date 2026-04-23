@@ -52,9 +52,17 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
                     seg_N = max(8, round(bdry_size / radius));
                     boundary.buildGeometricModelPS(dim, radius, size(bdry_segments{k}, 1), seg_N, ...
                         'eval + eval_first_ders', method, supersample_fac, mode, 1);
+                elseif dim == 3
+                    w = abs(max(box(:, 1)) - min(box(:, 1)));
+                    h = abs(max(box(:, 2)) - min(box(:, 2)));
+                    l = abs(max(box(:, 3)) - min(box(:, 3)));
+                    bdry_size = 2 * (w * h + h * l + l * w);
+                    seg_N = max(16, round(bdry_size / max(radius^2, eps)));
+                    boundary.buildGeometricModelPS(dim, radius, size(bdry_segments{k}, 1), seg_N, ...
+                        'eval + eval_first_ders', method, supersample_fac, mode, 1);
                 else
                     error('PiecewiseSmoothEmbeddedSurface:NotImplemented', ...
-                        'Clean restart currently implements piecewise segment generation in 2D first.');
+                        'Unsupported segment dimension.');
                 end
                 if flip_normal(k)
                     boundary.flipNormals();

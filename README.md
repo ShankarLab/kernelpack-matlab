@@ -32,11 +32,14 @@ The current code establishes a KernelPack-shaped starting point for geometry:
   gradient evaluation, inside-outside tests, and Newton projection routines.
 
 At the moment, the implemented geometric-model construction path is the 2D
-case:
+and early 3D cases:
 
 - smooth closed curves
 - open curve segments
 - piecewise-smooth planar boundaries assembled from segments
+- smooth closed 3D surfaces built from spherical-coordinate SBF interpolation
+- open 3D surface patches built from best-fit-plane chart coordinates
+- piecewise 3D surfaces assembled from patch segments
 
 ## Basic use
 
@@ -89,6 +92,24 @@ surface.buildLevelSet();
 xb = surface.getBdryNodes();
 nrmls = surface.getBdryNrmls();
 corners = surface.getCornerFlags();
+```
+
+### Smooth closed surface in 3D
+
+```matlab
+X = kp.geometry.fibonacciSphere(120);
+uv = kp.geometry.cart2sphRows(X);
+r = 1 + 0.15*cos(3*uv(:,1)).*cos(2*uv(:,2));
+pts = X .* r;
+
+surface = kp.geometry.EmbeddedSurface();
+surface.setDataSites(pts);
+surface.buildClosedGeometricModelPS(3, 0.2, size(pts,1), 160, ...
+    'eval + eval_first_ders', 1, 2, 2, 1);
+surface.buildLevelSetFromGeometricModel([]);
+
+xb = surface.getSampleSites();
+nrmls = surface.getNrmls();
 ```
 
 ## Project direction
