@@ -3,19 +3,20 @@
 `kernelpack-matlab` is a MATLAB companion project to
 [KernelPack](https://github.com/VarShankar/kernelpack).
 
-The aim is to bring the core geometry and meshfree building blocks of
-KernelPack into a MATLAB codebase that is easier to inspect, prototype with,
-and extend.
+The aim is to bring the core geometry, node-generation, polynomial, and
+meshfree discretization ingredients of KernelPack into a MATLAB codebase that
+is easier to inspect, prototype with, and extend.
 
 ## Current focus
 
-The repository is currently centered on the geometry layer. The first pieces in
-place are modeled after the main geometry and node-generation objects used in
-KernelPack:
+The repository now has a first pass of the main layers that sit underneath a
+KernelPack-style RBF-FD workflow:
 
 - `EmbeddedSurface`
 - `PiecewiseSmoothEmbeddedSurface`
 - `RBFLevelSet`
+- `DomainNodeGenerator`
+- `DomainDescriptor`
 - `JacobiPolynomials`
 - `PolynomialBasis`
 - `RBFStencil`
@@ -24,8 +25,6 @@ KernelPack:
 - `FDODiffOp`
 - total-degree and hyperbolic-cross index helpers
 - Chebyshev recurrence and evaluation helpers
-- `DomainDescriptor`
-- `DomainNodeGenerator`
 
 These classes live in [`+kp/+geometry`](+kp/+geometry) and
 [`+kp/+nodes`](+kp/+nodes) together with [`+kp/+domain`](+kp/+domain),
@@ -33,7 +32,7 @@ These classes live in [`+kp/+geometry`](+kp/+geometry) and
 
 ## What is here now
 
-The current code establishes a KernelPack-shaped starting point for geometry:
+The current codebase includes:
 
 - `EmbeddedSurface` stores the data sites, sampled boundary points, normals,
   tangents, bounding boxes, thickened copies, and level-set representation for
@@ -56,13 +55,14 @@ The current code establishes a KernelPack-shaped starting point for geometry:
   `RBFStencil`, `WeightedLeastSquaresStencil`, `FDDiffOp`, `FDODiffOp`,
   `StencilProperties`, and `OpProperties`.
 - `DomainDescriptor` stores the pared-down domain state: interior nodes,
-  boundary nodes, ghost nodes, boundary normals, and simple tree placeholders.
+  boundary nodes, ghost nodes, boundary normals, tree placeholders, and the
+  separation radius used by the current node set.
 - `DomainNodeGenerator` provides seeded fixed-radius Poisson disk sampling on
   axis-aligned boxes, geometry-aware clipping from raw box clouds to interior
-  node sets, and assembly into a `DomainDescriptor`.
+  node sets, outer refinement near boundaries, and assembly into a
+  `DomainDescriptor`.
 
-At the moment, the implemented geometric-model construction path is the 2D
-and early 3D cases:
+At the moment, the implemented geometry and node-generation paths include:
 
 - smooth closed curves
 - open curve segments
@@ -75,6 +75,15 @@ and early 3D cases:
   `PiecewiseSmoothEmbeddedSurface`
 - chunked `parfor` evaluation for large geometry-clipping jobs
 - outer refinement bands near the boundary using a smaller local spacing
+
+The current `rbffd` layer includes:
+
+- local PHS-plus-polynomial `RBFStencil` construction
+- local Legendre weighted least-squares reconstruction in
+  `WeightedLeastSquaresStencil`
+- one-row-per-center assembly through `FDDiffOp`
+- overlapped row acceptance and assembly through `FDODiffOp`
+- operator metadata via `StencilProperties` and `OpProperties`
 
 ## Basic use
 
@@ -241,17 +250,18 @@ L = assembler.getOp();
 
 ## Project direction
 
-The goal is to keep building outward from the KernelPack geometry contracts
+The goal is still to keep building outward from the KernelPack contracts
 rather than inventing a separate MATLAB abstraction stack. The next major steps
-are:
+are now:
 
-1. strengthen the current geometry objects
-2. improve the smooth closed 3D surface path further
-3. extend piecewise geometry handling further in 3D
-4. build node-generation and discretization layers on top of that geometry
+1. strengthen the smooth closed 3D and piecewise 3D geometry paths further
+2. make the node-generation layer richer around boundary and ghost-node logic
+3. expand the `rbffd` operator library beyond the current interpolation,
+   gradient, Laplacian, and boundary-condition paths
+4. add higher-level solver workflows on top of `DomainDescriptor` and `rbffd`
 
 ## Notes
 
 This repository is under active construction. The current contents should be
-viewed as an early geometry foundation rather than a full MATLAB port of
-KernelPack.
+viewed as an early but growing MATLAB implementation of the main KernelPack
+ingredients rather than a full port of every KernelPack path.
