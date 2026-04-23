@@ -23,12 +23,15 @@ KernelPack-style RBF-FD workflow:
 - `WeightedLeastSquaresStencil`
 - `FDDiffOp`
 - `FDODiffOp`
+- `PoissonSolver`
+- `DiffusionSolver`
 - total-degree and hyperbolic-cross index helpers
 - Chebyshev recurrence and evaluation helpers
 
 These classes live in [`+kp/+geometry`](+kp/+geometry) and
 [`+kp/+nodes`](+kp/+nodes) together with [`+kp/+domain`](+kp/+domain),
-[`+kp/+poly`](+kp/+poly), and [`+kp/+rbffd`](+kp/+rbffd).
+[`+kp/+poly`](+kp/+poly), [`+kp/+rbffd`](+kp/+rbffd), and
+[`+kp/+solvers`](+kp/+solvers).
 
 ## What is here now
 
@@ -54,6 +57,10 @@ The current codebase includes:
   classes for RBF-FD and polynomial weighted least-squares work:
   `RBFStencil`, `WeightedLeastSquaresStencil`, `FDDiffOp`, `FDODiffOp`,
   `StencilProperties`, and `OpProperties`.
+- `PoissonSolver` mirrors KernelPack's fixed-domain Poisson solver with cached
+  Laplacian assembly, separate boundary assembly, and callback-driven solves.
+- `DiffusionSolver` mirrors KernelPack's fixed-domain diffusion stepper with
+  cached Laplacian assembly, state history, and BDF1/BDF2/BDF3 time steps.
 - `DomainDescriptor` stores the pared-down domain state: interior nodes,
   boundary nodes, ghost nodes, boundary normals, KD-tree-backed search
   structures for the available node sets, and the separation radius used by
@@ -103,6 +110,14 @@ The repository also includes:
 - [`tests/poly_checks.m`](tests/poly_checks.m) for shared polynomial checks
 - [`tests/rbffd_checks.m`](tests/rbffd_checks.m) for the current stencil and
   assembler checks
+- [`examples/poisson_solver_example.m`](examples/poisson_solver_example.m) for
+  a full Poisson solve on a geometry-built domain
+- [`tests/poisson_solver_checks.m`](tests/poisson_solver_checks.m) for
+  lightweight Poisson solver checks
+- [`examples/diffusion_solver_example.m`](examples/diffusion_solver_example.m)
+  for a fixed-domain diffusion time-stepping run on a geometry-built domain
+- [`tests/diffusion_solver_checks.m`](tests/diffusion_solver_checks.m) for
+  lightweight diffusion solver checks
 
 ### Seeded box Poisson nodes
 
@@ -449,6 +464,89 @@ bcSp = kp.rbffd.StencilProperties( ...
     'spline_degree', 5, ...
     'treeMode', 'all', ...
     'pointSet', 'boundary');
+```
+
+### Fixed-domain Poisson solve on a geometry-backed domain
+
+```matlab
+% Build a geometry and convert it into a DomainDescriptor.
+t = linspace(0, 2*pi, 80).';
+t(end) = [];
+curve = [cos(t), 0.8*sin(t)];
+
+surface = kp.geometry.EmbeddedSurface();
+surface.setDataSites(curve);
+surface.buildClosedGeometricModelPS(2, 0.06, size(curve, 1));
+surface.buildLevelSetFromGeometricModel([]);
+
+generator = kp.nodes.DomainNodeGenerator();
+domain = generator.buildDomainDescriptorFromGeometry(surface, 0.1, ...
+    'Seed', 17, ...
+    'StripCount', 5, ...
+    'DoOuterRefinement', true, ...
+    'OuterFractionOfh', 0.5, ...
+    'OuterRefinementZoneSizeAsMultipleOfh', 2.0);
+
+% Set up the fixed-domain Poisson solver with separate Laplacian and BC pieces.
+solver = kp.solvers.PoissonSolver( ...
+    'LapAssembler', 'fd', ...
+    'BCAssembler', 'fd', ...
+    'LapStencil', 'wls', ...
+    'BCStencil', 'wls');
+solver.init(domain, 3);
+
+% Solve -Delta u = f with callback pieces for the forcing, BC coefficients,
+% and boundary values.
+uExact = @(X) X(:,1).^2 + X(:,2).^2;
+forcing = @(Xeq) -4 * ones(size(Xeq, 1), 1);
+neuCoeff = @(Xb) zeros(size(Xb, 1), 1);
+dirCoeff = @(Xb) ones(size(Xb, 1), 1);
+bc = @(NeuCoeffs, DirCoeffs, nr, Xb) uExact(Xb);
+
+result = solver.solve(forcing, neuCoeff, dirCoeff, bc);
+u = result.u;
+```
+
+The same solver can be switched to a different Laplacian or boundary backend
+just by changing the constructor options:
+
+```matlab
+solver = kp.solvers.PoissonSolver( ...
+    'LapAssembler', 'fd', ...
+    'BCAssembler', 'fd', ...
+    'LapStencil', 'rbf', ...
+    'BCStencil', 'rbf');
+```
+
+Like the C++ solver, `PoissonSolver.solve(...)` returns the physical target
+state on the interior-plus-boundary cloud, not the full all-node vector.
+
+### Fixed-domain diffusion stepping on a geometry-backed domain
+
+```matlab
+% Set up the fixed-domain diffusion stepper with separate Laplacian and BC pieces.
+solver = kp.solvers.DiffusionSolver( ...
+    'LapAssembler', 'fd', ...
+    'BCAssembler', 'fd', ...
+    'LapStencil', 'wls', ...
+    'BCStencil', 'wls');
+
+nu = 0.25;
+dt = 0.02;
+solver.init(domain, 3, dt, nu);
+
+% Seed the state history with the physical state on the interior-plus-boundary cloud.
+uExact = @(time, X) exp(-time) .* (X(:,1).^2 + X(:,2).^2);
+forcing = @(nuValue, time, X) -exp(-time) .* (X(:,1).^2 + X(:,2).^2) ...
+    - 4 * nuValue * exp(-time);
+neuCoeff = @(Xb) zeros(size(Xb, 1), 1);
+dirCoeff = @(Xb) ones(size(Xb, 1), 1);
+bc = @(NeuCoeffs, DirCoeffs, nr, time, Xb) uExact(time, Xb);
+
+solver.setInitialState(uExact(0, domain.getIntBdryNodes()));
+u1 = solver.bdf1Step(dt, forcing, neuCoeff, dirCoeff, bc);
+u2 = solver.bdf2Step(2 * dt, forcing, neuCoeff, dirCoeff, bc);
+u3 = solver.bdf3Step(3 * dt, forcing, neuCoeff, dirCoeff, bc);
 ```
 
 ## Project direction

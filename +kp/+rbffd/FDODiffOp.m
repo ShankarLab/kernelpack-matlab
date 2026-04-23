@@ -63,15 +63,27 @@ classdef FDODiffOp < handle
                 loc_x = stencilPoints(indices, :);
                 stencil = obj.approxFactory();
                 if useBoundary
-                    W = stencil.ComputeWeights(loc_x, centerNormals(localCenter, :), opts.NeuCoeff(localCenter), opts.DirCoeff(localCenter), stProps, opProps, op, rhs_indices);
+                    loc_nrmls = zeros(size(loc_x));
+                    for q = 1:numel(indices)
+                        candidateGlobal = stencilGlobals(indices(q));
+                        if isKey(rowToLocal, candidateGlobal)
+                            loc_nrmls(q, :) = centerNormals(rowToLocal(candidateGlobal), :);
+                        end
+                    end
+                    W = stencil.ComputeWeights(loc_x, loc_nrmls, opts.NeuCoeff(localCenter), opts.DirCoeff(localCenter), stProps, opProps, op, rhs_indices);
                 else
                     W = stencil.ComputeWeights(loc_x, stProps, opProps, op, rhs_indices);
                 end
                 A = stencil.getInterpMat();
                 lebesgue = sum(abs(W(1:stProps.n, :)), 1);
                 native = zeros(1, size(W, 2));
+                useEnergyMetric = ~isempty(A) && size(A, 1) == size(W, 1) && size(A, 2) == size(W, 1);
                 for j = 1:size(W, 2)
-                    native(j) = abs(W(:, j).' * (A * W(:, j)));
+                    if useEnergyMetric
+                        native(j) = abs(W(:, j).' * (A * W(:, j)));
+                    else
+                        native(j) = sum(abs(W(:, j)).^2);
+                    end
                 end
                 leb0 = lebesgue(1);
                 nat0 = native(1);
