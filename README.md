@@ -304,9 +304,9 @@ BC = bcAssembler.getOp();
 That path starts from a geometric model, generates interior, boundary, and
 ghost nodes through `DomainNodeGenerator`, packs them into a
 `DomainDescriptor`, and then assembles interior and boundary RBF-FD operators
-from the descriptor. The current assemblers store rows in the global
-interior-plus-boundary indexing used by the descriptor, so both `L` and `BC`
-are returned in that globally indexed sparse layout.
+from the descriptor. The interior operator `L` uses the descriptor's
+interior-plus-boundary row space, while the boundary operator `BC` is stored
+with one row per boundary point and one column per total node.
 
 Low-level stencil selection:
 

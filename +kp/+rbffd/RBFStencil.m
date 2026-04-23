@@ -303,11 +303,7 @@ classdef RBFStencil < handle
             cleanupObj = onCleanup(@() restoreWarnings(warnNear, warnSing)); %#ok<NASGU>
             warning('off', 'MATLAB:nearlySingularMatrix');
             warning('off', 'MATLAB:singularMatrix');
-            if rcond(A) < 1e-12
-                X = pinv(A) * B;
-            else
-                X = A \ B;
-            end
+            X = A \ B;
             if any(~isfinite(X), 'all')
                 X = pinv(A) * B;
             end

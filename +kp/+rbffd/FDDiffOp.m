@@ -27,14 +27,14 @@ classdef FDDiffOp < handle
             parser.parse(varargin{:});
             opts = parser.Results;
 
-            [centerPoints, centerGlobals, centerNormals] = pickCenters(domain, stProps.pointSet);
+            [centerPoints, centerRowIds, centerColGlobals, centerNormals] = pickCenters(domain, stProps.pointSet);
             [stencilPoints, stencilGlobals] = pickStencilPoints(domain, stProps.treeMode);
             activeRows = opts.ActiveRows(:);
             if isempty(activeRows)
                 activeRows = (1:size(centerPoints, 1)).';
             end
 
-            obj.N1 = max(centerGlobals);
+            obj.N1 = max(centerRowIds);
             obj.N2 = max(stencilGlobals);
             nrows = numel(activeRows);
             allIndices = cell(nrows, 1);
@@ -53,14 +53,15 @@ classdef FDDiffOp < handle
             if useParallel
                 parfor k = 1:nrows
                     localRow = activeRows(k);
-                    [allIndices{k}, allWeights{k}, allStencils{k}, centersRecorded{k}, globalsRecorded(k)] = ...
-                        assembleOne(obj.approxFactory, centerPoints, centerGlobals, centerNormals, stencilPoints, stencilGlobals, localRow, stProps, opProps, op, useBoundary, opts.NeuCoeff, opts.DirCoeff);
+                    [allIndices{k}, allWeights{k}, allStencils{k}, centersRecorded{k}, rowIds(k), globalsRecorded(k)] = ...
+                        assembleOne(obj.approxFactory, centerPoints, centerRowIds, centerColGlobals, centerNormals, stencilPoints, stencilGlobals, localRow, stProps, opProps, op, useBoundary, opts.NeuCoeff, opts.DirCoeff);
                 end
             else
+                rowIds = zeros(nrows, 1);
                 for k = 1:nrows
                     localRow = activeRows(k);
-                    [allIndices{k}, allWeights{k}, allStencils{k}, centersRecorded{k}, globalsRecorded(k)] = ...
-                        assembleOne(obj.approxFactory, centerPoints, centerGlobals, centerNormals, stencilPoints, stencilGlobals, localRow, stProps, opProps, op, useBoundary, opts.NeuCoeff, opts.DirCoeff);
+                    [allIndices{k}, allWeights{k}, allStencils{k}, centersRecorded{k}, rowIds(k), globalsRecorded(k)] = ...
+                        assembleOne(obj.approxFactory, centerPoints, centerRowIds, centerColGlobals, centerNormals, stencilPoints, stencilGlobals, localRow, stProps, opProps, op, useBoundary, opts.NeuCoeff, opts.DirCoeff);
                 end
             end
 
@@ -74,7 +75,7 @@ classdef FDDiffOp < handle
             for k = 1:nrows
                 cols = allIndices{k};
                 W = allWeights{k};
-                rowGlobal = globalsRecorded(k);
+                rowGlobal = rowIds(k);
                 for j = 1:stProps.n
                     obj.locations(cursor, :) = [rowGlobal, stencilGlobals(cols(j))];
                     obj.values(cursor) = W(j, 1);
@@ -97,9 +98,10 @@ classdef FDDiffOp < handle
     end
 end
 
-function [indices, W, stencil, centerPoint, centerGlobal] = assembleOne(approxFactory, centerPoints, centerGlobals, centerNormals, stencilPoints, ~, localRow, stProps, opProps, op, useBoundary, NeuCoeff, DirCoeff)
+function [indices, W, stencil, centerPoint, centerRowId, centerColGlobal] = assembleOne(approxFactory, centerPoints, centerRowIds, centerColGlobals, centerNormals, stencilPoints, ~, localRow, stProps, opProps, op, useBoundary, NeuCoeff, DirCoeff)
     centerPoint = centerPoints(localRow, :);
-    centerGlobal = centerGlobals(localRow);
+    centerRowId = centerRowIds(localRow);
+    centerColGlobal = centerColGlobals(localRow);
     d = kp.geometry.distanceMatrix(centerPoint, stencilPoints);
     [~, order] = sort(d, 2, 'ascend');
     indices = order(1:stProps.n);
@@ -113,19 +115,22 @@ function [indices, W, stencil, centerPoint, centerGlobal] = assembleOne(approxFa
     end
 end
 
-function [points, globals, normals] = pickCenters(domain, pointSet)
+function [points, rowIds, colGlobals, normals] = pickCenters(domain, pointSet)
     normals = [];
     switch kp.rbffd.StencilProperties.normalizePointSet(pointSet)
         case "all"
             points = domain.getAllNodes();
-            globals = (1:size(points, 1)).';
+            rowIds = (1:size(points, 1)).';
+            colGlobals = rowIds;
         case "interior_boundary"
             points = domain.getIntBdryNodes();
-            globals = (1:size(points, 1)).';
+            rowIds = (1:size(points, 1)).';
+            colGlobals = rowIds;
         case "boundary"
             points = domain.getBdryNodes();
             ni = domain.getNumInteriorNodes();
-            globals = (ni + (1:size(points, 1))).';
+            rowIds = (1:size(points, 1)).';
+            colGlobals = (ni + (1:size(points, 1))).';
             normals = domain.getNrmls();
         otherwise
             error('kp:rbffd:BadPointSet', 'Unknown pointSet.');
