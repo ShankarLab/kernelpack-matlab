@@ -38,6 +38,59 @@ case:
 - open curve segments
 - piecewise-smooth planar boundaries assembled from segments
 
+## Basic use
+
+### Smooth closed curve
+
+```matlab
+t = linspace(0, 2*pi, 40).';
+t(end) = [];
+x = [cos(t), 0.7*sin(t)];
+
+surface = kp.geometry.EmbeddedSurface();
+surface.setDataSites(x);
+surface.buildClosedGeometricModelPS(2, 0.05, size(x,1), 120, ...
+    'eval + eval_first_ders', 1, 2, 2, 1);
+surface.buildLevelSetFromGeometricModel([]);
+
+xb = surface.getSampleSites();
+nrmls = surface.getNrmls();
+phi = surface.getLevelSet().Evaluate(xb);
+```
+
+### Open curve segment
+
+```matlab
+u = linspace(0, 1, 30).';
+x = [u, u.^2];
+
+segment = kp.geometry.EmbeddedSurface();
+segment.setDataSites(x);
+segment.buildGeometricModelPS(2, 0.05, size(x,1), 80, ...
+    'eval + eval_first_ders', 1, 2, 2, 1);
+
+xb = segment.getSampleSites();
+nrmls = segment.getNrmls();
+```
+
+### Piecewise-smooth planar boundary
+
+```matlab
+seg1 = [linspace(0,1,20).', zeros(20,1)];
+seg2 = [ones(20,1), linspace(0,1,20).'];
+seg3 = [linspace(1,0,20).', ones(20,1)];
+seg4 = [zeros(20,1), linspace(1,0,20).'];
+
+surface = kp.geometry.PiecewiseSmoothEmbeddedSurface();
+surface.generatePiecewiseSmoothSurfaceBySegment( ...
+    {seg1, seg2, seg3, seg4}, [false false false false], 0.05, 1, 2, 2);
+surface.buildLevelSet();
+
+xb = surface.getBdryNodes();
+nrmls = surface.getBdryNrmls();
+corners = surface.getCornerFlags();
+```
+
 ## Project direction
 
 The goal is to keep building outward from the KernelPack geometry contracts
