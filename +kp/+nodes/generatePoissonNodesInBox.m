@@ -1,18 +1,18 @@
-function [X, info] = generatePoissonNodesInBox(radius, x_min, x_max, varargin)
-%GENERATEPOISSONNODESINBOX Poisson disk sampling on an axis-aligned box.
+function [X, info] = generatePoissonNodesInBox(radiusOrFunc, x_min, x_max, varargin)
+%GENERATEPOISSONNODESINBOX KernelPack-style Poisson disk sampling on a box.
 %
 %   X = kp.nodes.generatePoissonNodesInBox(radius, x_min, x_max)
-%   generates a point cloud in the box [x_min, x_max] using a fixed-radius
-%   Bridson-style sampler. The box dimension is inferred from the lengths of
-%   x_min and x_max and can be any positive integer.
+%   uses a fixed-radius sampler.
 %
-%   X = kp.nodes.generatePoissonNodesInBox(..., 'Seed', seed) makes the
-%   output deterministic. The same radius, box, strip count, and seed produce
-%   the same node set independent of parfor scheduling.
+%   X = kp.nodes.generatePoissonNodesInBox(radFunc, x_min, x_max, 'MinRadius', hmin)
+%   uses a variable-density sampler driven by radFunc(p, hmin).
 %
-%   [X, info] = ... also returns sampler metadata.
+%   Both modes support KernelPack-style outer refinement with:
+%     'BoundaryPoints', Xb
+%     'BoundaryRefinementFraction', frac
+%     'BoundaryDistance', dist
 
-    opts = parseInputs(radius, x_min, x_max, varargin{:});
+    opts = parseInputs(radiusOrFunc, x_min, x_max, varargin{:});
 
     if any(opts.x_max <= opts.x_min)
         X = zeros(0, numel(opts.x_min));
@@ -20,43 +20,41 @@ function [X, info] = generatePoissonNodesInBox(radius, x_min, x_max, varargin)
         return;
     end
 
-    stripBoxes = buildStripBoxes(opts.x_min, opts.x_max, opts.radius, opts.strip_count);
+    stripBoxes = buildStripBoxes(opts.x_min, opts.x_max, opts.split_tol, opts.strip_count);
     localClouds = cell(opts.strip_count, 1);
     stripSeeds = uint32(mod(double(opts.base_seed) + 104729 * (0:opts.strip_count-1), 2^32 - 1));
 
-    radius = opts.radius;
-    attempts = opts.attempts;
     if opts.use_parallel
         parfor k = 1:opts.strip_count
-            sample_min = stripBoxes{k}.sample_min;
-            sample_max = stripBoxes{k}.sample_max;
-            localClouds{k} = bridsonPoissonBox(radius, sample_min, sample_max, attempts, stripSeeds(k));
+            localClouds{k} = poissonStripSample(stripBoxes{k}.sample_min, stripBoxes{k}.sample_max, ...
+                opts, stripSeeds(k));
         end
     else
         for k = 1:opts.strip_count
-            localClouds{k} = bridsonPoissonBox(radius, stripBoxes{k}.sample_min, ...
-                stripBoxes{k}.sample_max, attempts, stripSeeds(k));
+            localClouds{k} = poissonStripSample(stripBoxes{k}.sample_min, stripBoxes{k}.sample_max, ...
+                opts, stripSeeds(k));
         end
     end
 
-    merged = mergeLocalClouds(localClouds, opts.x_min, opts.x_max, opts.radius);
-    X = merged.points;
-
+    X = flattenStripClouds(localClouds, opts.x_min, opts.x_max);
     info = struct( ...
         'dimension', numel(opts.x_min), ...
+        'mode', opts.mode, ...
         'radius', opts.radius, ...
+        'min_radius', opts.min_radius, ...
         'attempts', opts.attempts, ...
         'seed', opts.seed, ...
         'deterministic', opts.deterministic, ...
         'strip_count', opts.strip_count, ...
         'used_parallel', opts.use_parallel, ...
-        'num_candidates', merged.num_candidates, ...
+        'boundary_refinement_fraction', opts.boundary_refinement_fraction, ...
+        'boundary_distance', opts.boundary_distance, ...
         'num_points', size(X, 1));
 end
 
-function opts = parseInputs(radius, x_min, x_max, varargin)
+function opts = parseInputs(radiusOrFunc, x_min, x_max, varargin)
     parser = inputParser();
-    parser.addRequired('radius', @(x) validateattributes(x, {'numeric'}, {'scalar', 'real', 'finite', 'positive'}));
+    parser.addRequired('radiusOrFunc');
     parser.addRequired('x_min', @(x) validateattributes(x, {'numeric'}, {'vector', 'real', 'finite'}));
     parser.addRequired('x_max', @(x) validateattributes(x, {'numeric'}, {'vector', 'real', 'finite'}));
     parser.addParameter('Attempts', 30, @(x) validateattributes(x, {'numeric'}, {'scalar', 'integer', '>=', 1}));
@@ -64,7 +62,11 @@ function opts = parseInputs(radius, x_min, x_max, varargin)
     parser.addParameter('Deterministic', [], @(x) isempty(x) || islogical(x) || isnumeric(x));
     parser.addParameter('StripCount', [], @(x) isempty(x) || (isscalar(x) && isnumeric(x) && isfinite(x) && x >= 1));
     parser.addParameter('UseParallel', true, @(x) islogical(x) || isnumeric(x));
-    parser.parse(radius, x_min, x_max, varargin{:});
+    parser.addParameter('MinRadius', [], @(x) isempty(x) || (isscalar(x) && isnumeric(x) && isfinite(x) && x > 0));
+    parser.addParameter('BoundaryPoints', zeros(0, 0), @(x) isnumeric(x) && ismatrix(x));
+    parser.addParameter('BoundaryRefinementFraction', 1.0, @(x) validateattributes(x, {'numeric'}, {'scalar', 'real', 'finite', '>', 0, '<=', 1}));
+    parser.addParameter('BoundaryDistance', 0, @(x) validateattributes(x, {'numeric'}, {'scalar', 'real', 'finite', '>=', 0}));
+    parser.parse(radiusOrFunc, x_min, x_max, varargin{:});
 
     opts = parser.Results;
     opts.x_min = opts.x_min(:).';
@@ -86,33 +88,79 @@ function opts = parseInputs(radius, x_min, x_max, varargin)
         opts.deterministic = logical(opts.Deterministic);
     end
 
-    if isempty(opts.StripCount)
-        opts.strip_count = defaultStripCount(logical(opts.UseParallel), opts.deterministic);
+    requestedStripCount = [];
+    if ~isempty(opts.StripCount)
+        requestedStripCount = max(1, floor(opts.StripCount));
+    end
+    opts.strip_count = defaultStripCount(logical(opts.UseParallel), opts.deterministic, requestedStripCount);
+    opts.use_parallel = logical(opts.UseParallel) && opts.strip_count > 1 && canUseParfor();
+    opts.attempts = opts.Attempts;
+
+    opts.boundary_points = opts.BoundaryPoints;
+    if ~isempty(opts.boundary_points) && size(opts.boundary_points, 2) ~= numel(opts.x_min)
+        error('kp:nodes:BoundaryPointDimensionMismatch', ...
+            'BoundaryPoints must have the same column count as the box dimension.');
+    end
+    opts.boundary_refinement_fraction = opts.BoundaryRefinementFraction;
+    opts.boundary_distance = opts.BoundaryDistance;
+    opts.has_boundary_refinement = ~isempty(opts.boundary_points) && size(opts.boundary_points, 1) > 0 && ...
+        opts.boundary_refinement_fraction < 1 && opts.boundary_distance > 0;
+
+    if isa(radiusOrFunc, 'function_handle')
+        if isempty(opts.MinRadius)
+            error('kp:nodes:MissingMinRadius', ...
+                'Variable-density sampling requires a ''MinRadius'' value.');
+        end
+        opts.rad_func = radiusOrFunc;
+        opts.radius = NaN;
+        opts.min_radius = opts.MinRadius;
+        if opts.has_boundary_refinement
+            opts.mode = 'variable_radius_with_boundary_refinement';
+            opts.grid_radius = opts.boundary_refinement_fraction * opts.min_radius;
+        else
+            opts.mode = 'variable_radius';
+            opts.grid_radius = opts.min_radius;
+        end
     else
-        opts.strip_count = max(1, floor(opts.StripCount));
+        validateattributes(radiusOrFunc, {'numeric'}, {'scalar', 'real', 'finite', 'positive'});
+        opts.rad_func = [];
+        opts.radius = double(radiusOrFunc);
+        opts.min_radius = opts.radius;
+        if opts.has_boundary_refinement
+            opts.mode = 'fixed_radius_with_boundary_refinement';
+            opts.grid_radius = opts.boundary_refinement_fraction * opts.radius;
+        else
+            opts.mode = 'fixed_radius';
+            opts.grid_radius = opts.radius;
+        end
     end
 
-    opts.radius = opts.radius;
-    opts.attempts = opts.Attempts;
-    opts.use_parallel = logical(opts.UseParallel) && opts.strip_count > 1 && canUseParfor();
+    opts.split_tol = opts.min_radius;
 end
 
 function info = emptyInfo(opts)
     info = struct( ...
         'dimension', numel(opts.x_min), ...
+        'mode', opts.mode, ...
         'radius', opts.radius, ...
+        'min_radius', opts.min_radius, ...
         'attempts', opts.attempts, ...
         'seed', opts.seed, ...
         'deterministic', opts.deterministic, ...
         'strip_count', opts.strip_count, ...
         'used_parallel', false, ...
-        'num_candidates', 0, ...
+        'boundary_refinement_fraction', opts.boundary_refinement_fraction, ...
+        'boundary_distance', opts.boundary_distance, ...
         'num_points', 0);
 end
 
-function stripCount = defaultStripCount(useParallel, deterministic)
+function stripCount = defaultStripCount(useParallel, deterministic, requestedStripCount)
     if deterministic
-        stripCount = 5;
+        stripCount = 1;
+        return;
+    end
+    if ~isempty(requestedStripCount)
+        stripCount = requestedStripCount;
         return;
     end
     if ~useParallel || ~canUseParfor()
@@ -131,85 +179,51 @@ function tf = canUseParfor()
     tf = license('test', 'Distrib_Computing_Toolbox');
 end
 
-function stripBoxes = buildStripBoxes(x_min, x_max, radius, stripCount)
+function stripBoxes = buildStripBoxes(x_min, x_max, split_tol, stripCount)
     dim0 = (x_max(1) - x_min(1)) / stripCount;
-    overlap = radius;
     stripBoxes = cell(stripCount, 1);
     for k = 1:stripCount
-        core_min = x_min;
-        core_max = x_max;
-        core_min(1) = x_min(1) + (k - 1) * dim0;
-        core_max(1) = x_min(1) + k * dim0;
-        sample_min = core_min;
-        sample_max = core_max;
-        if k > 1
-            sample_min(1) = max(x_min(1), sample_min(1) - overlap);
-        end
-        if k < stripCount
-            sample_max(1) = min(x_max(1), sample_max(1) + overlap);
-        end
-        stripBoxes{k} = struct( ...
-            'core_min', core_min, ...
-            'core_max', core_max, ...
-            'sample_min', sample_min, ...
-            'sample_max', sample_max);
+        sample_min = x_min;
+        sample_max = x_max;
+        sample_min(1) = x_min(1) + (k - 1) * dim0;
+        sample_max(1) = sample_min(1) + dim0 - 0.33 * split_tol;
+        sample_max(1) = min(x_max(1), sample_max(1));
+        stripBoxes{k} = struct('sample_min', sample_min, 'sample_max', sample_max);
     end
 end
 
-function out = mergeLocalClouds(localClouds, x_min, x_max, radius)
-    dim = numel(x_min);
-    totalCount = sum(cellfun(@(x) size(x, 1), localClouds));
-    if totalCount == 0
-        out = struct('points', zeros(0, dim), 'num_candidates', 0);
+function X = poissonStripSample(sample_min, sample_max, opts, seed)
+    dim = numel(sample_min);
+    if any(sample_max <= sample_min)
+        X = zeros(0, dim);
         return;
     end
 
-    allPoints = zeros(totalCount, dim);
-    row0 = 1;
-    for k = 1:numel(localClouds)
-        pts = localClouds{k};
-        m = size(pts, 1);
-        if m == 0
-            continue;
-        end
-        rows = row0:(row0 + m - 1);
-        allPoints(rows, :) = pts;
-        row0 = row0 + m;
-    end
-    allPoints = allPoints(1:row0-1, :);
-    inBox = all(allPoints >= x_min, 2) & all(allPoints <= x_max, 2);
-    allPoints = allPoints(inBox, :);
-    allPoints = sortrows(allPoints);
-    out.points = acceptByGlobalGrid(allPoints, x_min, x_max, radius);
-    out.num_candidates = size(allPoints, 1);
-end
-
-function X = bridsonPoissonBox(radius, x_min, x_max, attempts, seed)
-    dim = numel(x_min);
-    cellSize = radius / sqrt(dim);
-    gridSize = max(ones(1, dim), ceil((x_max - x_min) / cellSize));
+    cellSize = opts.grid_radius / sqrt(dim);
+    gridSize = max(ones(1, dim), ceil((sample_max - sample_min) / cellSize));
     grid = containers.Map('KeyType', 'char', 'ValueType', 'uint32');
     points = zeros(128, dim);
     active = zeros(128, 1, 'uint32');
 
     stream = RandStream('mt19937ar', 'Seed', double(seed));
-    x0 = x_min + rand(stream, 1, dim) .* (x_max - x_min);
-    [points, active, grid, nPoints, nActive] = addPoint(points, active, grid, x0, x_min, cellSize, 0, 0);
+    x0 = sample_min + rand(stream, 1, dim) .* (sample_max - sample_min);
+    [points, active, grid, nPoints, nActive] = addPoint(points, active, grid, x0, sample_min, cellSize, 0, 0);
 
     while nActive > 0
         pick = randi(stream, nActive);
         activeIdx = active(pick);
         base = points(activeIdx, :);
+        activeRadius = localRadius(base, opts);
         accepted = false;
-        for attempt = 1:attempts
-            candidate = proposeCandidate(base, radius, dim, stream);
-            if any(candidate < x_min) || any(candidate > x_max)
+        for attempt = 1:opts.attempts
+            candidate = proposeCandidate(base, activeRadius, dim, stream);
+            if any(candidate < sample_min) || any(candidate > sample_max)
                 continue;
             end
-            if hasNeighbor(candidate, radius, points, grid, x_min, cellSize, gridSize)
+            if hasConflictingNeighbor(candidate, activeIdx, points, nPoints, grid, sample_min, cellSize, gridSize, opts)
                 continue;
             end
-            [points, active, grid, nPoints, nActive] = addPoint(points, active, grid, candidate, x_min, cellSize, nPoints, nActive);
+            [points, active, grid, nPoints, nActive] = addPoint(points, active, grid, candidate, sample_min, cellSize, nPoints, nActive);
             accepted = true;
             break;
         end
@@ -220,6 +234,97 @@ function X = bridsonPoissonBox(radius, x_min, x_max, attempts, seed)
     end
 
     X = points(1:nPoints, :);
+end
+
+function radius = localRadius(point, opts)
+    switch opts.mode
+        case 'fixed_radius'
+            radius = opts.radius;
+        case 'fixed_radius_with_boundary_refinement'
+            radius = boundaryRefinedRadius(point, opts);
+        case 'variable_radius'
+            radius = opts.rad_func(point, opts.min_radius);
+            if radius <= 1e-10
+                radius = opts.min_radius;
+            end
+        case 'variable_radius_with_boundary_refinement'
+            baseRadius = opts.rad_func(point, opts.min_radius);
+            if baseRadius <= 1e-10
+                baseRadius = opts.min_radius;
+            end
+            if boundaryRadFrac(point, opts) < 1
+                radius = opts.boundary_refinement_fraction * opts.min_radius;
+            else
+                radius = baseRadius;
+            end
+        otherwise
+            error('kp:nodes:UnknownMode', 'Unknown Poisson sampling mode.');
+    end
+end
+
+function frac = boundaryRadFrac(point, opts)
+    if ~opts.has_boundary_refinement
+        frac = 1.0;
+        return;
+    end
+    dist = nearestBoundaryDistance(point, opts.boundary_points);
+    if dist <= opts.boundary_distance
+        frac = opts.boundary_refinement_fraction;
+    else
+        frac = 1.0;
+    end
+end
+
+function radius = boundaryRefinedRadius(point, opts)
+    radius = boundaryRadFrac(point, opts) * opts.radius;
+end
+
+function tf = hasConflictingNeighbor(point, activeIdx, points, nPoints, grid, x_min, cellSize, gridSize, opts)
+    candidateRadius = localRadius(point, opts);
+    switch opts.mode
+        case 'fixed_radius_with_boundary_refinement'
+            radiusForReach = max(candidateRadius, opts.radius);
+            excludeActive = false;
+            pairwise = true;
+        case {'fixed_radius', 'variable_radius', 'variable_radius_with_boundary_refinement'}
+            radiusForReach = candidateRadius;
+            excludeActive = true;
+            pairwise = false;
+        otherwise
+            error('kp:nodes:UnknownMode', 'Unknown Poisson sampling mode.');
+    end
+
+    idx = pointToCell(point, x_min, cellSize);
+    reach = max(1, ceil(radiusForReach / cellSize));
+    ranges = cell(1, numel(idx));
+    for d = 1:numel(idx)
+        ranges{d} = max(1, idx(d) - reach):min(gridSize(d), idx(d) + reach);
+    end
+
+    tf = false;
+    neighborCells = enumerateNeighborCells(ranges);
+    for k = 1:size(neighborCells, 1)
+        key = cellKey(neighborCells(k, :));
+        if ~isKey(grid, key)
+            continue;
+        end
+        j = double(grid(key));
+        if j < 1 || j > nPoints
+            continue;
+        end
+        if excludeActive && j == activeIdx
+            continue;
+        end
+        if pairwise
+            threshold = max(candidateRadius, localRadius(points(j, :), opts));
+        else
+            threshold = candidateRadius;
+        end
+        if norm(point - points(j, :), 2) < threshold
+            tf = true;
+            return;
+        end
+    end
 end
 
 function candidate = proposeCandidate(base, radius, dim, stream)
@@ -250,28 +355,6 @@ function [points, active, grid, nPoints, nActive] = addPoint(points, active, gri
     grid(cellKey(idx)) = uint32(nPoints);
 end
 
-function tf = hasNeighbor(point, radius, points, grid, x_min, cellSize, gridSize)
-    idx = pointToCell(point, x_min, cellSize);
-    reach = max(1, ceil(radius / cellSize));
-    ranges = cell(1, numel(idx));
-    for d = 1:numel(idx)
-        ranges{d} = max(1, idx(d) - reach):min(gridSize(d), idx(d) + reach);
-    end
-    tf = false;
-    neighborCells = enumerateNeighborCells(ranges);
-    for k = 1:size(neighborCells, 1)
-        key = cellKey(neighborCells(k, :));
-        if ~isKey(grid, key)
-            continue;
-        end
-        j = grid(key);
-        if norm(point - points(j, :), 2) < radius
-            tf = true;
-            return;
-        end
-    end
-end
-
 function idx = pointToCell(point, x_min, cellSize)
     idx = floor((point - x_min) ./ cellSize) + 1;
     idx = max(idx, 1);
@@ -292,29 +375,33 @@ function cells = enumerateNeighborCells(ranges)
     end
 end
 
-function accepted = acceptByGlobalGrid(points, x_min, x_max, radius)
-    dim = size(points, 2);
-    if isempty(points)
-        accepted = zeros(0, dim);
-        return;
-    end
-
-    cellSize = radius / sqrt(dim);
-    gridSize = max(ones(1, dim), ceil((x_max - x_min) / cellSize));
-    grid = containers.Map('KeyType', 'char', 'ValueType', 'uint32');
-    keep = false(size(points, 1), 1);
-    accepted = zeros(size(points));
-    nAccepted = 0;
-    for i = 1:size(points, 1)
-        pt = points(i, :);
-        if hasNeighbor(pt, radius, accepted, grid, x_min, cellSize, gridSize)
+function X = flattenStripClouds(localClouds, x_min, x_max)
+    dim = numel(x_min);
+    totalCount = sum(cellfun(@(x) size(x, 1), localClouds));
+    X = zeros(totalCount, dim);
+    row0 = 1;
+    for k = 1:numel(localClouds)
+        pts = localClouds{k};
+        m = size(pts, 1);
+        if m == 0
             continue;
         end
-        nAccepted = nAccepted + 1;
-        accepted(nAccepted, :) = pt;
-        idx = pointToCell(pt, x_min, cellSize);
-        grid(cellKey(idx)) = uint32(nAccepted);
-        keep(i) = true;
+        rows = row0:(row0 + m - 1);
+        X(rows, :) = pts;
+        row0 = row0 + m;
     end
-    accepted = accepted(1:nAccepted, :);
+    X = X(1:row0-1, :);
+    if ~isempty(X)
+        inBox = all(X >= x_min, 2) & all(X <= x_max, 2);
+        X = X(inBox, :);
+    end
+end
+
+function dist = nearestBoundaryDistance(point, boundaryPoints)
+    if isempty(boundaryPoints)
+        dist = inf;
+        return;
+    end
+    diffs = boundaryPoints - point;
+    dist = sqrt(min(sum(diffs.^2, 2), [], 'omitnan'));
 end

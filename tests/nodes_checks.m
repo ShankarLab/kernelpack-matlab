@@ -18,12 +18,19 @@ assert(info2a.deterministic && info2b.deterministic, 'Seeded runs should report 
     'Seed', 31, 'StripCount', 5);
 assert(size(x3, 2) == 3, '3D nodes should have three coordinates.');
 assert(minPairDistance(x3) >= 0.16 * (1 - 1e-10), '3D nodes must respect the exclusion radius.');
-assert(info3.strip_count == 5, 'Explicit strip count should be preserved.');
+assert(info3.strip_count == 1, 'Deterministic sampling should collapse to one canonical strip, matching C++.');
 
 [x4, ~] = kp.nodes.generatePoissonNodesInBox(0.35, zeros(1, 4), ones(1, 4), ...
     'Seed', 5, 'StripCount', 3, 'UseParallel', false);
 assert(size(x4, 2) == 4, 'Sampler should work in dimensions beyond 3.');
 assert(minPairDistance(x4) >= 0.35 * (1 - 1e-10), '4D nodes must respect the exclusion radius.');
+
+radFunc = @(p, hmin) hmin * (1 + 0.5 * (p(1) > 0.5));
+[xVar, infoVar] = kp.nodes.generatePoissonNodesInBox(radFunc, [0 0], [1 1], ...
+    'MinRadius', 0.06, 'Seed', 41, 'StripCount', 5, 'UseParallel', false);
+assert(strcmp(infoVar.mode, 'variable_radius'), 'Variable-density mode should be reported correctly.');
+assert(size(xVar, 2) == 2, 'Variable-density nodes should keep the box dimension.');
+assert(minPairDistance(xVar) >= 0.06 * (1 - 1e-10), 'Variable-density nodes must respect the minimum radius.');
 
 gen = kp.nodes.DomainNodeGenerator();
 gen.generatePoissonNodes(0.1, [0 0], [1 1], 'Seed', 13, 'StripCount', 4);

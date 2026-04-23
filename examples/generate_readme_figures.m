@@ -43,9 +43,9 @@ grid on;
 title('Boundary Samples');
 
 nexttile;
-plot(xb(:, 1), xb(:, 2), 'b.', 'MarkerSize', 12);
+plot(xb(:, 1), xb(:, 2), '.', 'MarkerSize', 12);
 hold on;
-quiver(xb(:, 1), xb(:, 2), nrmls(:, 1), nrmls(:, 2), 0.05, 'Color', [0.82 0.18 0.18]);
+quiver(xb(:, 1), xb(:, 2), 0.05 * nrmls(:, 1), 0.05 * nrmls(:, 2), 0);
 axis equal;
 grid on;
 title('Boundary Normals');

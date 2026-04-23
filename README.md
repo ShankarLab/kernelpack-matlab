@@ -119,9 +119,9 @@ grid on;
 title('Boundary Samples');
 
 nexttile;
-plot(xb(:, 1), xb(:, 2), 'b.', 'MarkerSize', 12);
+plot(xb(:, 1), xb(:, 2), '.', 'MarkerSize', 12);
 hold on;
-quiver(xb(:, 1), xb(:, 2), nrmls(:, 1), nrmls(:, 2), 0.05, 'Color', [0.82 0.18 0.18]);
+quiver(xb(:, 1), xb(:, 2), 0.05 * nrmls(:, 1), 0.05 * nrmls(:, 2), 0);
 axis equal;
 grid on;
 title('Boundary Normals');
@@ -507,6 +507,8 @@ separate solver abstraction hierarchy.
 
 - This is a MATLAB implementation of the main KernelPack ingredients, not a
   full one-to-one port of every C++ path.
+- Deterministic Poisson node generation now follows the current KernelPack
+  C++ behavior by using one canonical strip during deterministic runs.
 - Pure Neumann Poisson problems are solved with the usual nullspace
   augmentation, so comparisons should be made after aligning the constant.
 - The repo includes both `RBFStencil` and `WeightedLeastSquaresStencil`, but

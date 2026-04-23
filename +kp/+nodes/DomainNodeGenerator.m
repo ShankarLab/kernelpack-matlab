@@ -30,65 +30,52 @@ classdef DomainNodeGenerator < handle
         function generateInteriorNodesFromGeometry(obj, geometry, radius, varargin)
             parser = inputParser();
             parser.KeepUnmatched = true;
+            parser.addParameter('RadiusFunction', [], @(x) isempty(x) || isa(x, 'function_handle'));
             parser.addParameter('DoOuterRefinement', false, @(x) islogical(x) || isnumeric(x));
-            parser.addParameter('OuterFractionOfh', 0.5, @(x) validateattributes(x, {'numeric'}, {'scalar', 'real', 'finite', 'positive', '<=', 1}));
+            parser.addParameter('OuterFractionOfh', 1.0, @(x) validateattributes(x, {'numeric'}, {'scalar', 'real', 'finite', 'positive', '<=', 1}));
             parser.addParameter('OuterRefinementZoneSizeAsMultipleOfh', 2.0, @(x) validateattributes(x, {'numeric'}, {'scalar', 'real', 'finite', 'positive'}));
             parser.parse(varargin{:});
             localOpts = parser.Results;
             samplerArgs = namedArgsToCell(parser.Unmatched);
 
+            [boundaryNodes, boundaryNormals, boundaryLevelSet] = buildBoundaryState(geometry);
             [x_min, x_max] = kp.nodes.boundingBoxExtents(geometry, true);
-            obj.generatePoissonNodes(radius, x_min, x_max, samplerArgs{:});
-
-            if ~localOpts.DoOuterRefinement
-                obj.clipToGeometry(geometry, 'Keep', 'inside', 'BoundaryClearance', radius);
-                obj.last_info.min_active_radius = radius;
-                return;
+            if isempty(localOpts.RadiusFunction)
+                samplerInput = radius;
+                samplerArgs = [samplerArgs, {'MinRadius', radius}];
+            else
+                samplerInput = localOpts.RadiusFunction;
+                samplerArgs = [samplerArgs, {'MinRadius', radius}];
             end
 
-            fineRadius = localOpts.OuterFractionOfh * radius;
-            zoneSize = localOpts.OuterRefinementZoneSizeAsMultipleOfh * radius;
-            minRadiusUsed = min(radius, fineRadius);
-
-            levelSet = geometry.getLevelSet();
-            if isempty(levelSet) || levelSet.n == 0
-                if ismethod(geometry, 'buildLevelSetFromGeometricModel')
-                    geometry.buildLevelSetFromGeometricModel([]);
-                else
-                    geometry.buildLevelSet();
-                end
-                levelSet = geometry.getLevelSet();
+            if localOpts.DoOuterRefinement
+                zoneSize = localOpts.OuterRefinementZoneSizeAsMultipleOfh * radius;
+                samplerArgs = [samplerArgs, ...
+                    {'BoundaryPoints', boundaryNodes, ...
+                     'BoundaryRefinementFraction', localOpts.OuterFractionOfh, ...
+                     'BoundaryDistance', zoneSize}];
             end
 
-            coarsePhi = levelSet.Evaluate(obj.Xi_pds_raw);
-            coarseMask = (coarsePhi <= -zoneSize) & (coarsePhi <= -minRadiusUsed);
-            coarseNodes = obj.Xi_pds_raw(coarseMask, :);
+            [Xraw, info] = kp.nodes.generatePoissonNodesInBox(samplerInput, x_min, x_max, samplerArgs{:});
+            obj.Xi = Xraw;
+            obj.Xb = zeros(0, size(Xraw, 2));
+            obj.Xg = zeros(0, size(Xraw, 2));
+            obj.Nrmls = zeros(0, size(Xraw, 2));
+            obj.Xi_orig = Xraw;
+            obj.Xi_pds_raw = Xraw;
+            obj.s_dim = size(Xraw, 2);
+            obj.last_info = info;
 
-            [fineRaw, fineInfo] = kp.nodes.generatePoissonNodesInBox(fineRadius, x_min, x_max, samplerArgs{:});
-            [fineNodes, fineMask, finePhi] = kp.nodes.clipPointsByGeometry(fineRaw, geometry, ...
-                'Keep', 'inside', ...
-                'BoundaryClearance', minRadiusUsed, ...
-                'MinSignedDistance', -zoneSize, ...
-                'MaxSignedDistance', -minRadiusUsed, ...
-                'UseParallel', true);
-
-            obj.Xi_pds_raw = [obj.Xi_pds_raw; fineRaw];
-            obj.Xi = [coarseNodes; fineNodes];
-            obj.Xi_orig = obj.Xi;
-            obj.s_dim = size(obj.Xi, 2);
+            clearance = localOpts.OuterFractionOfh * radius;
+            obj.clipToGeometry(geometry, 'Keep', 'inside', 'BoundaryClearance', clearance);
+            obj.last_info.min_active_radius = clearance;
             obj.last_info.outer_refinement = struct( ...
-                'enabled', true, ...
-                'coarse_radius', radius, ...
-                'fine_radius', fineRadius, ...
-                'zone_size', zoneSize, ...
-                'min_active_radius', minRadiusUsed, ...
-                'coarse_points_kept', size(coarseNodes, 1), ...
-                'fine_raw_points', size(fineRaw, 1), ...
-                'fine_points_kept', size(fineNodes, 1), ...
-                'fine_info', fineInfo, ...
-                'fine_mask', fineMask, ...
-                'fine_phi', finePhi(fineMask));
-            obj.last_info.min_active_radius = minRadiusUsed;
+                'enabled', logical(localOpts.DoOuterRefinement), ...
+                'refinement_fraction', localOpts.OuterFractionOfh, ...
+                'zone_size', localOpts.OuterRefinementZoneSizeAsMultipleOfh * radius, ...
+                'boundary_distance', localOpts.OuterRefinementZoneSizeAsMultipleOfh * radius);
+            obj.last_info.boundary_node_count = size(boundaryNodes, 1);
+            obj.last_info.boundary_level_set_built = ~isempty(boundaryLevelSet);
         end
 
         function [X, mask, phi] = clipToGeometry(obj, geometry, varargin)
@@ -104,16 +91,12 @@ classdef DomainNodeGenerator < handle
         function descriptor = buildDomainDescriptorFromGeometry(obj, geometry, radius, varargin)
             obj.generateInteriorNodesFromGeometry(geometry, radius, varargin{:});
             [boundaryNodes, boundaryNormals, boundaryLevelSet] = buildBoundaryState(geometry);
-            minRadiusUsed = radius;
-            if isfield(obj.last_info, 'min_active_radius')
-                minRadiusUsed = obj.last_info.min_active_radius;
-            end
-            ghostNodes = boundaryNodes + 0.5 * minRadiusUsed * boundaryNormals;
+            ghostNodes = boundaryNodes + 0.5 * radius * boundaryNormals;
 
             descriptor = kp.domain.DomainDescriptor();
             descriptor.setNodes(obj.Xi, boundaryNodes, ghostNodes);
             descriptor.setNormals(boundaryNormals);
-            descriptor.setSepRad(minRadiusUsed);
+            descriptor.setSepRad(radius);
             descriptor.setOuterLevelSet(boundaryLevelSet);
             descriptor.setBoundaryLevelSets({boundaryLevelSet});
             descriptor.buildStructs();
@@ -124,7 +107,8 @@ classdef DomainNodeGenerator < handle
             obj.descriptor = descriptor;
             obj.last_info.boundary_node_count = size(boundaryNodes, 1);
             obj.last_info.ghost_node_count = size(ghostNodes, 1);
-            obj.last_info.min_active_radius = minRadiusUsed;
+            obj.last_info.min_active_radius = obj.last_info.min_active_radius;
+            obj.last_info.sep_radius = radius;
         end
 
         function out = getInteriorNodes(obj)

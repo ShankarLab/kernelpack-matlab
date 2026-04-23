@@ -84,14 +84,16 @@ classdef EmbeddedSurface < handle
                     ts = ts(1:end-1);
                     ptss = obj.evalClosedCurve(ts);
                     [tanS, nrmlS] = obj.evalClosedCurveFrame(ts);
-                    keep = kp.geometry.weightedSampleEliminationMIS(ptss, rad);
-                    keep = obj.ensureNonemptyKeep(keep, size(ptss, 1));
                     obj.sample_sites_s = ptss;
-                    obj.sample_sites = ptss(keep, :);
                     obj.tangents1_s = tanS;
                     obj.Nrmls_s = nrmlS;
-                    obj.tangents1 = tanS(keep, :);
-                    obj.Nrmls = nrmlS(keep, :);
+                    curveLength = obj.closedPolylineLength(ptss);
+                    targetSpacing = max(sqrt(2.0) * rad, eps);
+                    targetCount = max(2, round(curveLength / targetSpacing));
+                    keepInds = kp.geometry.resampleClosedCurveByArcLength(ptss, targetCount);
+                    obj.sample_sites = ptss(keepInds, :);
+                    obj.tangents1 = tanS(keepInds, :);
+                    obj.Nrmls = nrmlS(keepInds, :);
                     obj.uniform_sample_sites = obj.sample_sites;
                     obj.uniform_Nrmls = obj.Nrmls;
                 else
