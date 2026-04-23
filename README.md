@@ -43,6 +43,13 @@ and early 3D cases:
 
 ## Basic use
 
+The repository also includes:
+
+- [`examples/geometry_examples.m`](examples/geometry_examples.m) for a quick run
+  through the current 2D and 3D geometry paths
+- [`tests/geometry_checks.m`](tests/geometry_checks.m) for lightweight geometry
+  checks on normals, assembled boundary clouds, and piecewise seam handling
+
 ### Smooth closed curve
 
 ```matlab
@@ -119,7 +126,7 @@ rather than inventing a separate MATLAB abstraction stack. The next major steps
 are:
 
 1. strengthen the current geometry objects
-2. add the smooth closed 3D surface path
+2. improve the smooth closed 3D surface path further
 3. extend piecewise geometry handling further in 3D
 4. build node-generation and discretization layers on top of that geometry
 

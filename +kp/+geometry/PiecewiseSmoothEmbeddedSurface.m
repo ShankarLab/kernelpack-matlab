@@ -25,10 +25,12 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
     end
 
     methods
-        function generatePiecewiseSmoothSurfaceBySegment(obj, bdry_segments, flip_normal, radius, method, supersample_fac, mode)
+        function generatePiecewiseSmoothSurfaceBySegment(obj, bdry_segments, flip_normal, radius, method, supersample_fac, mode, smooth_normals, smooth_neighborhood)
             if nargin < 5 || isempty(method), method = 1; end
             if nargin < 6 || isempty(supersample_fac), supersample_fac = 2; end
             if nargin < 7 || isempty(mode), mode = 2; end
+            if nargin < 8 || isempty(smooth_normals), smooth_normals = false; end
+            if nargin < 9 || isempty(smooth_neighborhood), smooth_neighborhood = 0; end
 
             nSeg = numel(bdry_segments);
             obj.segments = cell(size(bdry_segments));
@@ -55,15 +57,23 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
             obj.segments = localSegments;
 
             counts = zeros(numel(obj.segments), 1);
+            uniformCounts = zeros(numel(obj.segments), 1);
             for k = 1:numel(obj.segments)
                 counts(k) = size(obj.segments{k}.getSampleSites(), 1);
+                uniformCounts(k) = size(obj.segments{k}.getUniformSampleSites(), 1);
             end
             totalCount = sum(counts);
+            totalUniformCount = sum(uniformCounts);
             Xb_s = zeros(totalCount, dim);
             Nrmls_s = zeros(totalCount, dim);
+            Xb_su = zeros(totalUniformCount, dim);
+            Nrmls_su = zeros(totalUniformCount, dim);
             obj.segment_map = zeros(totalCount, 1);
             obj.corner_flags = zeros(totalCount, 1);
+            uniformSegmentMap = zeros(totalUniformCount, 1);
+            uniformCornerFlags = zeros(totalUniformCount, 1);
             row0 = 1;
+            rowu0 = 1;
             for k = 1:numel(obj.segments)
                 seg = obj.segments{k};
                 pts = seg.getSampleSites();
@@ -78,19 +88,45 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
                 flags(end) = 1;
                 obj.corner_flags(rows) = flags;
                 row0 = row0 + m;
+
+                ptsu = seg.getUniformSampleSites();
+                nrmlsu = seg.getUniformNrmls();
+                mu = size(ptsu, 1);
+                rowsu = rowu0:(rowu0 + mu - 1);
+                Xb_su(rowsu, :) = ptsu;
+                Nrmls_su(rowsu, :) = nrmlsu;
+                uniformSegmentMap(rowsu) = k;
+                flagsu = zeros(mu, 1);
+                flagsu(1) = 1;
+                flagsu(end) = 1;
+                uniformCornerFlags(rowsu) = flagsu;
+                rowu0 = rowu0 + mu;
             end
 
-            keep = obj.dedupMask(Xb_s, 0.2 * radius);
-            obj.Xb = Xb_s(keep, :);
-            obj.Nrmls = kp.geometry.normalizeRows(Nrmls_s(keep, :));
-            obj.segment_map = obj.segment_map(keep);
-            obj.corner_flags = obj.corner_flags(keep);
-            obj.Xb_uniform = obj.Xb;
-            obj.Nrmls_uniform = obj.Nrmls;
+            [obj.Xb, obj.Nrmls, obj.segment_map, obj.corner_flags] = ...
+                obj.deduplicateBoundary(Xb_s, Nrmls_s, obj.segment_map, obj.corner_flags, 0.2 * radius);
+            [obj.Xb_uniform, obj.Nrmls_uniform, ~, ~] = ...
+                obj.deduplicateBoundary(Xb_su, Nrmls_su, uniformSegmentMap, uniformCornerFlags, 0.2 * radius);
+
+            obj.segment_map = obj.segment_map(:);
+            obj.corner_flags = obj.corner_flags(:);
             obj.Nrmls_raw = obj.Nrmls;
             obj.Nrmls_uniform_raw = obj.Nrmls_uniform;
-            obj.Nrmls_smoothed = obj.Nrmls;
-            obj.Nrmls_uniform_smoothed = obj.Nrmls_uniform;
+            obj.Nrmls_smoothed = obj.Nrmls_raw;
+            obj.Nrmls_uniform_smoothed = obj.Nrmls_uniform_raw;
+            if smooth_normals && smooth_neighborhood > 0
+                obj.Nrmls_smoothed = obj.smoothNormals(obj.Xb, obj.Nrmls_raw, smooth_neighborhood);
+                obj.Nrmls_uniform_smoothed = obj.smoothNormals(obj.Xb_uniform, obj.Nrmls_uniform_raw, smooth_neighborhood);
+                obj.Nrmls = obj.Nrmls_smoothed;
+                obj.Nrmls_uniform = obj.Nrmls_uniform_smoothed;
+            else
+                obj.Nrmls = obj.Nrmls_raw;
+                obj.Nrmls_uniform = obj.Nrmls_uniform_raw;
+            end
+
+            duplicateCornerMask = false(size(obj.corner_flags));
+            duplicateCornerMask(obj.corner_flags ~= 0) = true;
+            obj.corner_flags = double(duplicateCornerMask);
             obj.N = size(obj.Xb, 1);
 
             obj.buildTree();
@@ -158,15 +194,83 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
             tf = true;
         end
 
-        function keep = dedupMask(~, X, tol)
-            keep = true(size(X, 1), 1);
-            for i = 1:size(X, 1)
-                if ~keep(i)
+        function [Xout, Nout, segOut, cornerOut] = deduplicateBoundary(~, X, N, segMap, cornerFlags, tol)
+            n = size(X, 1);
+            if n == 0
+                Xout = X;
+                Nout = N;
+                segOut = segMap;
+                cornerOut = cornerFlags;
+                return;
+            end
+
+            D = kp.geometry.distanceMatrix(X, X);
+            visited = false(n, 1);
+            Xkeep = zeros(n, size(X, 2));
+            Nkeep = zeros(n, size(N, 2));
+            segKeep = zeros(n, 1);
+            cornerKeep = zeros(n, 1);
+            outCount = 0;
+
+            for i = 1:n
+                if visited(i)
                     continue;
                 end
-                d = sqrt(sum((X(i+1:end, :) - X(i, :)).^2, 2));
-                dup = find(d <= tol) + i;
-                keep(dup) = false;
+                cluster = find(D(i, :) <= tol);
+                visited(cluster) = true;
+                outCount = outCount + 1;
+                Xkeep(outCount, :) = mean(X(cluster, :), 1);
+
+                nrmls = N(cluster, :);
+                nref = nrmls(1, :);
+                for j = 2:size(nrmls, 1)
+                    if dot(nrmls(j, :), nref) < 0
+                        nrmls(j, :) = -nrmls(j, :);
+                    end
+                end
+                Navg = mean(nrmls, 1);
+                Nkeep(outCount, :) = Navg ./ max(norm(Navg, 2), eps);
+                segKeep(outCount) = segMap(cluster(1));
+
+                isCorner = any(cornerFlags(cluster) ~= 0);
+                if numel(unique(segMap(cluster))) > 1
+                    isCorner = true;
+                end
+                if size(nrmls, 1) > 1
+                    angles = nrmls * nrmls.';
+                    angles = angles(triu(true(size(angles)), 1));
+                    if any(angles < cosd(35))
+                        isCorner = true;
+                    end
+                end
+                cornerKeep(outCount) = double(isCorner);
+            end
+
+            Xout = Xkeep(1:outCount, :);
+            Nout = kp.geometry.normalizeRows(Nkeep(1:outCount, :));
+            segOut = segKeep(1:outCount);
+            cornerOut = cornerKeep(1:outCount);
+        end
+
+        function NrmlsOut = smoothNormals(~, X, NrmlsIn, neighborhood)
+            n = size(X, 1);
+            NrmlsOut = NrmlsIn;
+            if n == 0 || neighborhood <= 1
+                return;
+            end
+            D = kp.geometry.distanceMatrix(X, X);
+            for i = 1:n
+                [~, order] = sort(D(i, :), 'ascend');
+                take = order(1:min(neighborhood, n));
+                nri = NrmlsIn(take, :);
+                nref = nri(1, :);
+                for j = 2:size(nri, 1)
+                    if dot(nri(j, :), nref) < 0
+                        nri(j, :) = -nri(j, :);
+                    end
+                end
+                navg = mean(nri, 1);
+                NrmlsOut(i, :) = navg ./ max(norm(navg, 2), eps);
             end
         end
     end
