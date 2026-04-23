@@ -1,0 +1,14 @@
+name: kernelpack_matlab
+description: "KernelPack-shaped MATLAB geometry, node generation, RBF-FD, PU, and PDE solver toolkit"
+version: "0.1.0"
+license: "Proprietary"
+homepage: "https://github.com/ShankarLab/kernelpack-matlab"
+repository: "https://github.com/ShankarLab/kernelpack-matlab"
+dependencies: []
+test_script: tests/mip_package_checks.m
+
+addpaths:
+  - path: "."
+
+builds:
+  - architectures: [any]

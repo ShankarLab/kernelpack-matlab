@@ -47,6 +47,30 @@ The main packages live in:
 - PU diffusion stepping with BDF1, BDF2, and BDF3
 - Coupled PU-SL advection-diffusion with either FD or PU diffusion
 
+## MIP install
+
+This repo includes a [`mip.yaml`](mip.yaml), so it can be installed as a
+local [MIP](https://mip.sh/) package.
+
+Install MIP in MATLAB:
+
+```matlab
+eval(webread('https://mip.sh/install.txt'))
+```
+
+Install this repo from a local checkout:
+
+```matlab
+mip install -e E:/kernelpack-matlab
+mip load kernelpack_matlab
+```
+
+Run the package smoke test:
+
+```matlab
+mip test kernelpack_matlab
+```
+
 ## Status
 
 The current MATLAB implementation includes the main numerical layers that sit
