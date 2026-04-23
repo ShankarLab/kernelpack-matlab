@@ -55,8 +55,9 @@ The current codebase includes:
   `RBFStencil`, `WeightedLeastSquaresStencil`, `FDDiffOp`, `FDODiffOp`,
   `StencilProperties`, and `OpProperties`.
 - `DomainDescriptor` stores the pared-down domain state: interior nodes,
-  boundary nodes, ghost nodes, boundary normals, tree placeholders, and the
-  separation radius used by the current node set.
+  boundary nodes, ghost nodes, boundary normals, KD-tree-backed search
+  structures for the available node sets, and the separation radius used by
+  the current node set.
 - `DomainNodeGenerator` provides seeded fixed-radius Poisson disk sampling on
   axis-aligned boxes, geometry-aware clipping from raw box clouds to interior
   node sets, outer refinement near boundaries, and assembly into a
@@ -83,6 +84,7 @@ The current `rbffd` layer includes:
   `WeightedLeastSquaresStencil`
 - one-row-per-center assembly through `FDDiffOp`
 - overlapped row acceptance and assembly through `FDODiffOp`
+- tree-backed nearest-neighbor selection through `DomainDescriptor`
 - operator metadata via `StencilProperties` and `OpProperties`
 
 ## Basic use

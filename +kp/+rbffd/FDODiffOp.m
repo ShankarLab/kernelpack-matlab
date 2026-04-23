@@ -28,7 +28,8 @@ classdef FDODiffOp < handle
             opts = parser.Results;
 
             [centerPoints, centerRowIds, centerColGlobals, centerNormals] = pickCenters(domain, stProps.pointSet);
-            [stencilPoints, stencilGlobals] = pickStencilPoints(domain, stProps.treeMode);
+            stencilPoints = domain.getTreePoints(stProps.treeMode);
+            stencilGlobals = domain.getTreeGlobals(stProps.treeMode);
             activeRows = opts.ActiveRows(:);
             if isempty(activeRows)
                 activeRows = (1:size(centerPoints, 1)).';
@@ -56,9 +57,8 @@ classdef FDODiffOp < handle
             while any(activeSet)
                 localCenter = find(activeSet, 1, 'first');
                 centerPoint = centerPoints(localCenter, :);
-                d = kp.geometry.distanceMatrix(centerPoint, stencilPoints);
-                [~, order] = sort(d, 2, 'ascend');
-                indices = order(1:stProps.n);
+                [indices, ~] = domain.queryKnn(stProps.treeMode, centerPoint, stProps.n);
+                indices = indices(1, :).';
                 rhs_indices = 1:min(loc_lim, numel(indices));
                 loc_x = stencilPoints(indices, :);
                 stencil = obj.approxFactory();
@@ -142,22 +142,5 @@ function [points, rowIds, colGlobals, normals] = pickCenters(domain, pointSet)
             normals = domain.getNrmls();
         otherwise
             error('kp:rbffd:BadPointSet', 'Unknown pointSet.');
-    end
-end
-
-function [points, globals] = pickStencilPoints(domain, treeMode)
-    switch kp.rbffd.StencilProperties.normalizeTreeMode(treeMode)
-        case "all"
-            points = domain.getAllNodes();
-            globals = (1:size(points, 1)).';
-        case "interior_boundary"
-            points = domain.getIntBdryNodes();
-            globals = (1:size(points, 1)).';
-        case "boundary"
-            points = domain.getBdryNodes();
-            ni = domain.getNumInteriorNodes();
-            globals = (ni + (1:size(points, 1))).';
-        otherwise
-            error('kp:rbffd:BadTreeMode', 'Unknown treeMode.');
     end
 end

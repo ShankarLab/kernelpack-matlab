@@ -28,12 +28,12 @@ classdef FDDiffOp < handle
             opts = parser.Results;
 
             [centerPoints, centerRowIds, centerColGlobals, centerNormals] = pickCenters(domain, stProps.pointSet);
-            [stencilPoints, stencilGlobals] = pickStencilPoints(domain, stProps.treeMode);
             activeRows = opts.ActiveRows(:);
             if isempty(activeRows)
                 activeRows = (1:size(centerPoints, 1)).';
             end
 
+            stencilGlobals = domain.getTreeGlobals(stProps.treeMode);
             obj.N1 = max(centerRowIds);
             obj.N2 = max(stencilGlobals);
             nrows = numel(activeRows);
@@ -54,14 +54,14 @@ classdef FDDiffOp < handle
                 parfor k = 1:nrows
                     localRow = activeRows(k);
                     [allIndices{k}, allWeights{k}, allStencils{k}, centersRecorded{k}, rowIds(k), globalsRecorded(k)] = ...
-                        assembleOne(obj.approxFactory, centerPoints, centerRowIds, centerColGlobals, centerNormals, stencilPoints, stencilGlobals, localRow, stProps, opProps, op, useBoundary, opts.NeuCoeff, opts.DirCoeff);
+                        assembleOne(obj.approxFactory, domain, centerPoints, centerRowIds, centerColGlobals, centerNormals, localRow, stProps, opProps, op, useBoundary, opts.NeuCoeff, opts.DirCoeff);
                 end
             else
                 rowIds = zeros(nrows, 1);
                 for k = 1:nrows
                     localRow = activeRows(k);
                     [allIndices{k}, allWeights{k}, allStencils{k}, centersRecorded{k}, rowIds(k), globalsRecorded(k)] = ...
-                        assembleOne(obj.approxFactory, centerPoints, centerRowIds, centerColGlobals, centerNormals, stencilPoints, stencilGlobals, localRow, stProps, opProps, op, useBoundary, opts.NeuCoeff, opts.DirCoeff);
+                        assembleOne(obj.approxFactory, domain, centerPoints, centerRowIds, centerColGlobals, centerNormals, localRow, stProps, opProps, op, useBoundary, opts.NeuCoeff, opts.DirCoeff);
                 end
             end
 
@@ -98,13 +98,13 @@ classdef FDDiffOp < handle
     end
 end
 
-function [indices, W, stencil, centerPoint, centerRowId, centerColGlobal] = assembleOne(approxFactory, centerPoints, centerRowIds, centerColGlobals, centerNormals, stencilPoints, ~, localRow, stProps, opProps, op, useBoundary, NeuCoeff, DirCoeff)
+function [indices, W, stencil, centerPoint, centerRowId, centerColGlobal] = assembleOne(approxFactory, domain, centerPoints, centerRowIds, centerColGlobals, centerNormals, localRow, stProps, opProps, op, useBoundary, NeuCoeff, DirCoeff)
     centerPoint = centerPoints(localRow, :);
     centerRowId = centerRowIds(localRow);
     centerColGlobal = centerColGlobals(localRow);
-    d = kp.geometry.distanceMatrix(centerPoint, stencilPoints);
-    [~, order] = sort(d, 2, 'ascend');
-    indices = order(1:stProps.n);
+    [indices, ~] = domain.queryKnn(stProps.treeMode, centerPoint, stProps.n);
+    indices = indices(1, :).';
+    stencilPoints = domain.getTreePoints(stProps.treeMode);
     loc_x = stencilPoints(indices, :);
     stencil = approxFactory();
     if useBoundary
@@ -137,22 +137,5 @@ function [points, rowIds, colGlobals, normals] = pickCenters(domain, pointSet)
     end
     if isempty(normals) && kp.rbffd.StencilProperties.normalizePointSet(pointSet) == "boundary"
         normals = domain.getNrmls();
-    end
-end
-
-function [points, globals] = pickStencilPoints(domain, treeMode)
-    switch kp.rbffd.StencilProperties.normalizeTreeMode(treeMode)
-        case "all"
-            points = domain.getAllNodes();
-            globals = (1:size(points, 1)).';
-        case "interior_boundary"
-            points = domain.getIntBdryNodes();
-            globals = (1:size(points, 1)).';
-        case "boundary"
-            points = domain.getBdryNodes();
-            ni = domain.getNumInteriorNodes();
-            globals = (ni + (1:size(points, 1))).';
-        otherwise
-            error('kp:rbffd:BadTreeMode', 'Unknown treeMode.');
     end
 end

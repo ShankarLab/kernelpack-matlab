@@ -9,9 +9,9 @@ classdef DomainDescriptor < handle
         Xf double = zeros(0, 0)
         Nrmls double = zeros(0, 0)
         sepRad (1,1) double = NaN
-        tallTree struct = struct('Points', [])
-        intBdryTree struct = struct('Points', [])
-        bdryTree struct = struct('Points', [])
+        tallTree struct = struct('Points', [], 'Searcher', [], 'HasSearcher', false)
+        intBdryTree struct = struct('Points', [], 'Searcher', [], 'HasSearcher', false)
+        bdryTree struct = struct('Points', [], 'Searcher', [], 'HasSearcher', false)
         outerLevelSet = []
         boundaryLevelSets cell = {}
     end
@@ -54,15 +54,83 @@ classdef DomainDescriptor < handle
         end
 
         function buildBdryTree(obj)
-            obj.bdryTree = struct('Points', obj.Xb);
+            obj.bdryTree = obj.buildTreeStruct(obj.Xb);
         end
 
         function buildTallTree(obj)
-            obj.tallTree = struct('Points', obj.Xf);
+            obj.tallTree = obj.buildTreeStruct(obj.Xf);
         end
 
         function buildIntBdryTree(obj)
-            obj.intBdryTree = struct('Points', obj.X);
+            obj.intBdryTree = obj.buildTreeStruct(obj.X);
+        end
+
+        function [indices, distances] = queryKnn(obj, treeMode, queryPoints, k)
+            treeMode = string(treeMode);
+            [tree, points] = obj.getTreeData(treeMode);
+            if isempty(points)
+                indices = zeros(size(queryPoints, 1), 0);
+                distances = zeros(size(queryPoints, 1), 0);
+                return;
+            end
+
+            k = min(k, size(points, 1));
+            if tree.HasSearcher
+                [indices, distances] = knnsearch(tree.Searcher, queryPoints, 'K', k);
+                if isvector(indices)
+                    indices = reshape(indices, size(queryPoints, 1), []);
+                    distances = reshape(distances, size(queryPoints, 1), []);
+                end
+                return;
+            end
+
+            d = kp.geometry.distanceMatrix(queryPoints, points);
+            [distances, order] = sort(d, 2, 'ascend');
+            indices = order(:, 1:k);
+            distances = distances(:, 1:k);
+        end
+
+        function [indices, distances] = queryBall(obj, treeMode, queryPoints, radius)
+            treeMode = string(treeMode);
+            [tree, points] = obj.getTreeData(treeMode);
+            if isempty(points)
+                indices = cell(size(queryPoints, 1), 1);
+                distances = cell(size(queryPoints, 1), 1);
+                return;
+            end
+
+            if tree.HasSearcher
+                [indices, distances] = rangesearch(tree.Searcher, queryPoints, radius);
+                return;
+            end
+
+            d = kp.geometry.distanceMatrix(queryPoints, points);
+            indices = cell(size(queryPoints, 1), 1);
+            distances = cell(size(queryPoints, 1), 1);
+            for q = 1:size(queryPoints, 1)
+                mask = d(q, :) <= radius;
+                indices{q} = find(mask);
+                distances{q} = d(q, mask);
+            end
+        end
+
+        function points = getTreePoints(obj, treeMode)
+            [~, points] = obj.getTreeData(string(treeMode));
+        end
+
+        function globals = getTreeGlobals(obj, treeMode)
+            treeMode = string(treeMode);
+            switch treeMode
+                case "all"
+                    globals = (1:size(obj.Xf, 1)).';
+                case "interior_boundary"
+                    globals = (1:size(obj.X, 1)).';
+                case "boundary"
+                    ni = obj.getNumInteriorNodes();
+                    globals = (ni + (1:size(obj.Xb, 1))).';
+                otherwise
+                    error('kp:domain:BadTreeMode', 'Unknown tree mode "%s".', treeMode);
+            end
         end
 
         function out = getInteriorNodes(obj), out = obj.Xi; end
@@ -96,6 +164,33 @@ classdef DomainDescriptor < handle
             end
             obj.X = [obj.Xi; obj.Xb];
             obj.Xf = [obj.X; obj.Xg];
+        end
+
+        function [tree, points] = getTreeData(obj, treeMode)
+            switch treeMode
+                case "all"
+                    tree = obj.tallTree;
+                    points = obj.Xf;
+                case "interior_boundary"
+                    tree = obj.intBdryTree;
+                    points = obj.X;
+                case "boundary"
+                    tree = obj.bdryTree;
+                    points = obj.Xb;
+                otherwise
+                    error('kp:domain:BadTreeMode', 'Unknown tree mode "%s".', treeMode);
+            end
+        end
+
+        function tree = buildTreeStruct(~, points)
+            tree = struct('Points', points, 'Searcher', [], 'HasSearcher', false);
+            if isempty(points)
+                return;
+            end
+            if exist('KDTreeSearcher', 'class') == 8 && exist('knnsearch', 'file') == 2
+                tree.Searcher = KDTreeSearcher(points);
+                tree.HasSearcher = true;
+            end
         end
     end
 end

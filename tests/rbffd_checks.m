@@ -10,6 +10,11 @@ domain = kp.domain.DomainDescriptor();
 domain.setNodes(X, zeros(0, 2), zeros(0, 2));
 domain.setSepRad(0.5);
 domain.buildStructs();
+assert(domain.getIntBdryTree().HasSearcher || ~isempty(domain.getIntBdryTree().Points), ...
+    'DomainDescriptor should build a usable neighbor-search structure for interior-boundary nodes.');
+[nnIdx, nnDist] = domain.queryKnn("interior_boundary", X(1, :), 4);
+assert(size(nnIdx, 2) == 4 && nnDist(1, 1) < 1e-14, ...
+    'DomainDescriptor knn queries should return the requested number of neighbors with self distance first.');
 
 sp = kp.rbffd.StencilProperties('n', 9, 'dim', 2, 'ell', 2, 'spline_degree', 3, ...
     'treeMode', 'interior_boundary', 'pointSet', 'interior_boundary');
