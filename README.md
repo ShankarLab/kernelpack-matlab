@@ -10,13 +10,16 @@ and extend.
 ## Current focus
 
 The repository is currently centered on the geometry layer. The first pieces in
-place are modeled after the main geometry objects used in KernelPack:
+place are modeled after the main geometry and node-generation objects used in
+KernelPack:
 
 - `EmbeddedSurface`
 - `PiecewiseSmoothEmbeddedSurface`
 - `RBFLevelSet`
+- `DomainNodeGenerator`
 
-These classes live in [`+kp/+geometry`](+kp/+geometry).
+These classes live in [`+kp/+geometry`](+kp/+geometry) and
+[`+kp/+nodes`](+kp/+nodes).
 
 ## What is here now
 
@@ -30,6 +33,8 @@ The current code establishes a KernelPack-shaped starting point for geometry:
   and level-set representation for a piecewise-smooth boundary.
 - `RBFLevelSet` provides an implicit boundary representation with evaluation,
   gradient evaluation, inside-outside tests, and Newton projection routines.
+- `DomainNodeGenerator` provides seeded fixed-radius Poisson disk sampling on
+  axis-aligned boxes and stores the raw interior node cloud.
 
 At the moment, the implemented geometric-model construction path is the 2D
 and early 3D cases:
@@ -40,6 +45,7 @@ and early 3D cases:
 - smooth closed 3D surfaces built from spherical-coordinate SBF interpolation
 - open 3D surface patches built from best-fit-plane chart coordinates
 - piecewise 3D surfaces assembled from patch segments
+- fixed-radius Poisson disk sampling on axis-aligned boxes in any dimension
 
 ## Basic use
 
@@ -49,6 +55,22 @@ The repository also includes:
   through the current 2D and 3D geometry paths
 - [`tests/geometry_checks.m`](tests/geometry_checks.m) for lightweight geometry
   checks on normals, assembled boundary clouds, and piecewise seam handling
+- [`examples/nodes_examples.m`](examples/nodes_examples.m) for seeded box
+  Poisson node generation examples
+- [`tests/nodes_checks.m`](tests/nodes_checks.m) for basic node-generation
+  determinism and spacing checks
+
+### Seeded box Poisson nodes
+
+```matlab
+[x, info] = kp.nodes.generatePoissonNodesInBox(0.08, [0 0 0], [1 1 1], ...
+    'Seed', 17, 'StripCount', 5);
+
+generator = kp.nodes.DomainNodeGenerator();
+generator.generatePoissonNodes(0.08, [0 0 0], [1 1 1], 'Seed', 17, 'StripCount', 5);
+
+raw_nodes = generator.getRawPoissonInteriorNodes();
+```
 
 ### Smooth closed curve
 
