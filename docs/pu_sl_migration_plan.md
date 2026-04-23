@@ -33,8 +33,23 @@ advection-diffusion solvers in dependency order.
 4. `PUSLPUAdvectionDiffusionSolver`
    - Couple PU-SL transport with a MATLAB `PUDiffusionSolver`
    - Required validation before moving on:
-     - 2D convergence study
-     - comparison against the FD-diffusion coupled solver on the same test case
+      - 2D convergence study
+      - comparison against the FD-diffusion coupled solver on the same test case
+
+5. `MultiSpeciesPUDiffusionSolver`
+   - Thin wrapper on top of `PUDiffusionSolver`
+   - Required validation before moving on:
+      - species-wise agreement with repeated scalar PU diffusion solves
+      - 2D multispecies convergence study
+
+6. `MultiSpeciesPUSLViscousBurgersSolver`
+   - Build on the scalar and multispecies PU transport-diffusion pieces already mirrored
+   - Required validation before moving on:
+      - 2D convergence study
+      - inviscid and zero-velocity sanity limits
+
+7. `PUFV2DVectorBurgers`
+   - Bring over the finite-volume Burgers path after the PU solver family is stable
 
 ## Ground rules
 

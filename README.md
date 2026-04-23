@@ -19,6 +19,10 @@ prototype with, and extend.
   `PolynomialBasis`
 - RBF-FD and weighted least-squares stencil and assembly classes in `kp.rbffd`
 - Fixed-domain `PoissonSolver` and `DiffusionSolver`
+- PU diffusion and PU-SL transport-coupled solvers:
+  `PUDiffusionSolver`, `MultiSpeciesPUDiffusionSolver`,
+  `PUSLAdvectionSolver`, `MultiSpeciesPUSLAdvectionSolver`,
+  `PUSLFDAdvectionDiffusionSolver`, and `PUSLPUAdvectionDiffusionSolver`
 
 The main packages live in:
 
@@ -39,6 +43,9 @@ The main packages live in:
 - Standard and overlapped RBF-FD assembly
 - Fixed-domain Poisson solves
 - Fixed-domain diffusion stepping with BDF1, BDF2, and BDF3
+- PU semi-Lagrangian advection on fixed domains
+- PU diffusion stepping with BDF1, BDF2, and BDF3
+- Coupled PU-SL advection-diffusion with either FD or PU diffusion
 
 ## Status
 
@@ -66,6 +73,12 @@ Examples:
 - [`examples/poisson_solver_example.m`](examples/poisson_solver_example.m)
 - [`examples/poisson_solver_example_3d.m`](examples/poisson_solver_example_3d.m)
 - [`examples/diffusion_solver_example.m`](examples/diffusion_solver_example.m)
+- [`examples/pu_diffusion_convergence_2d.m`](examples/pu_diffusion_convergence_2d.m)
+- [`examples/multispecies_pu_diffusion_convergence_2d.m`](examples/multispecies_pu_diffusion_convergence_2d.m)
+- [`examples/pusl_advection_rotation_convergence_2d.m`](examples/pusl_advection_rotation_convergence_2d.m)
+- [`examples/pusl_multispecies_convergence_2d.m`](examples/pusl_multispecies_convergence_2d.m)
+- [`examples/pusl_fd_advection_diffusion_convergence_2d.m`](examples/pusl_fd_advection_diffusion_convergence_2d.m)
+- [`examples/pusl_pu_advection_diffusion_convergence_2d.m`](examples/pusl_pu_advection_diffusion_convergence_2d.m)
 - [`examples/poisson_convergence_2d.m`](examples/poisson_convergence_2d.m)
 - [`examples/poisson_convergence_2d_neumann.m`](examples/poisson_convergence_2d_neumann.m)
 - [`examples/poisson_convergence_3d.m`](examples/poisson_convergence_3d.m)
@@ -79,6 +92,12 @@ Checks:
 - [`tests/rbffd_checks.m`](tests/rbffd_checks.m)
 - [`tests/poisson_solver_checks.m`](tests/poisson_solver_checks.m)
 - [`tests/diffusion_solver_checks.m`](tests/diffusion_solver_checks.m)
+- [`tests/pusl_advection_checks.m`](tests/pusl_advection_checks.m)
+- [`tests/pusl_multispecies_checks.m`](tests/pusl_multispecies_checks.m)
+- [`tests/pusl_fd_advection_diffusion_checks.m`](tests/pusl_fd_advection_diffusion_checks.m)
+- [`tests/pu_diffusion_checks.m`](tests/pu_diffusion_checks.m)
+- [`tests/multispecies_pu_diffusion_checks.m`](tests/multispecies_pu_diffusion_checks.m)
+- [`tests/pusl_pu_advection_diffusion_checks.m`](tests/pusl_pu_advection_diffusion_checks.m)
 
 ## Quick examples
 
