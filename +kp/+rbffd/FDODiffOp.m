@@ -59,6 +59,12 @@ classdef FDODiffOp < handle
                 centerPoint = centerPoints(localCenter, :);
                 [indices, ~] = domain.queryKnn(stProps.treeMode, centerPoint, stProps.n);
                 indices = indices(1, :).';
+                if numel(indices) < stProps.n
+                    error('kp:rbffd:InsufficientStencilNodes', ...
+                        ['Requested stencil size n=%d, but only %d nodes are available in tree mode "%s". ' ...
+                         'Decrease the target order or use a larger domain / smaller h.'], ...
+                        stProps.n, numel(indices), string(stProps.treeMode));
+                end
                 rhs_indices = 1:min(loc_lim, numel(indices));
                 loc_x = stencilPoints(indices, :);
                 stencil = obj.approxFactory();

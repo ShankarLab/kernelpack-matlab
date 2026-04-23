@@ -65,7 +65,7 @@ classdef FDDiffOp < handle
                 end
             end
 
-            tripletCount = nrows * stProps.n;
+            tripletCount = sum(cellfun(@numel, allIndices));
             obj.locations = zeros(tripletCount, 2);
             obj.values = zeros(tripletCount, 1);
             cursor = 1;
@@ -76,7 +76,7 @@ classdef FDDiffOp < handle
                 cols = allIndices{k};
                 W = allWeights{k};
                 rowGlobal = rowIds(k);
-                for j = 1:stProps.n
+                for j = 1:numel(cols)
                     obj.locations(cursor, :) = [rowGlobal, stencilGlobals(cols(j))];
                     obj.values(cursor) = W(j, 1);
                     cursor = cursor + 1;
@@ -104,6 +104,12 @@ function [indices, W, stencil, centerPoint, centerRowId, centerColGlobal] = asse
     centerColGlobal = centerColGlobals(localRow);
     [indices, ~] = domain.queryKnn(stProps.treeMode, centerPoint, stProps.n);
     indices = indices(1, :).';
+    if numel(indices) < stProps.n
+        error('kp:rbffd:InsufficientStencilNodes', ...
+            ['Requested stencil size n=%d, but only %d nodes are available in tree mode "%s". ' ...
+             'Decrease the target order or use a larger domain / smaller h.'], ...
+            stProps.n, numel(indices), string(stProps.treeMode));
+    end
     stencilPoints = domain.getTreePoints(stProps.treeMode);
     loc_x = stencilPoints(indices, :);
     stencil = approxFactory();
