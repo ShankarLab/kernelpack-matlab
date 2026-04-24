@@ -5,6 +5,7 @@ common = pusl_advection_common();
 domain = common.create_disk_domain(0.16);
 
 solver = kp.solvers.PUSLAdvectionSolver();
+solver.setTangentialFlowBoundary();
 solver.init(domain, 4, 0.01);
 
 % Constant preservation sanity check.
@@ -12,8 +13,17 @@ c0 = solver.projectConstant(2.0, 1);
 c1 = solver.backwardSLStep(0.0, c0, ...
     @(t, X) common.velocity_disk(t, X), ...
     @(t, X, dt, velocity) rk4sl(t, X, dt, velocity));
-assert(max(abs(c1 - 2.0)) < 5.0e-4, ...
+q1 = solver.evaluateAtNodes(c1);
+assert(max(abs(q1 - 2.0)) < 5.0e-4, ...
     'Backward PU-SL step should keep constants nearly invariant for this tangential flow case.');
+
+% Forward constant preservation sanity check.
+cf = solver.forwardSLStep(0.0, c0, ...
+    @(t, X) common.velocity_disk(t, X), ...
+    @(t, X, dt, velocity) exact_rotation_step(X, dt));
+qf = solver.evaluateAtNodes(cf);
+assert(max(abs(qf - 2.0)) < 5.0e-4, ...
+    'Forward PU-SL step should keep constants nearly invariant for this tangential flow case.');
 
 % One manufactured solve sanity check.
 c0 = solver.projectInitial(@(x) common.smooth_initial_value(x));
@@ -26,6 +36,12 @@ assert(norm(q - qex) / norm(qex) < 2.5e-1, ...
     'Backward PU-SL step should give a modestly accurate one-step update.');
 
 disp('pusl advection checks passed');
+end
+
+function Xnext = exact_rotation_step(X, dt)
+Xnext = zeros(size(X));
+Xnext(:, 1) = X(:, 1) * cos(dt) + X(:, 2) * sin(dt);
+Xnext(:, 2) = -X(:, 1) * sin(dt) + X(:, 2) * cos(dt);
 end
 
 function Xnext = rk4sl(t, X, dt, velocity)

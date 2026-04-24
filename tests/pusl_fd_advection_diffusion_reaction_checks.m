@@ -7,7 +7,6 @@ domain = common.create_disk_domain(0.16);
 solver = kp.solvers.PUSLFDAdvectionDiffusionReactionSolver();
 solver.init(domain, 4, 4, 0.01, 0.05, "backward");
 solver.enableHomogeneousNeumannMassConservation(true);
-
 Xout = solver.getOutputNodes();
 u0 = common.exact_solution(0.0, Xout);
 solver.setInitialState(u0);

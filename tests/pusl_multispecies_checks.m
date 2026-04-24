@@ -9,8 +9,9 @@ solver.init(domain, 4, 0.01, 2);
 % Constant preservation per species.
 c0 = solver.projectConstants([2.0, -1.0]);
 c1 = solver.backwardSLStep(0.0, c0, @velocity_disk, []);
-assert(max(abs(c1(:, 1) - 2.0)) < 5.0e-4);
-assert(max(abs(c1(:, 2) + 1.0)) < 5.0e-4);
+q1 = solver.evaluateAtNodes(c1);
+assert(max(abs(q1(:, 1) - 2.0)) < 5.0e-4);
+assert(max(abs(q1(:, 2) + 1.0)) < 5.0e-4);
 
 % Joint solve should agree with species-by-species exact transport.
 c0 = solver.projectInitial(@initial_values_row);

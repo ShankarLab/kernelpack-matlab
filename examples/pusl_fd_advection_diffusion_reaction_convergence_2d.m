@@ -29,7 +29,6 @@ for io = 1:numel(orders)
         solver = kp.solvers.PUSLFDAdvectionDiffusionReactionSolver();
         solver.init(domain, xi, xi, dt, nu, "backward");
         solver.enableHomogeneousNeumannMassConservation(true);
-
         Xout = solver.getOutputNodes();
         u0 = common.exact_solution(0.0, Xout);
         m0 = solver.totalMass(u0);

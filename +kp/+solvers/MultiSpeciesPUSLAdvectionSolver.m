@@ -91,7 +91,7 @@ classdef MultiSpeciesPUSLAdvectionSolver < handle
             if numel(values) ~= obj.num_species
                 error('kp:solvers:BadSpeciesCount', 'projectConstants received the wrong number of species values.');
             end
-            coeffs = repmat(values, size(obj.solver.getOutputNodes(), 1), 1);
+            coeffs = obj.solver.projectSamples(repmat(values, size(obj.solver.getOutputNodes(), 1), 1));
         end
 
         function coeffs = projectSamples(obj, nodal_samples)

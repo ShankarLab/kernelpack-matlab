@@ -21,9 +21,9 @@ function [Xkeep, keepMask, phi] = clipPointsByGeometry(X, geometry, varargin)
 
     switch lower(opts.Keep)
         case 'inside'
-            keepMask = phi <= (opts.Tolerance - opts.BoundaryClearance);
-        case 'outside'
             keepMask = phi >= (opts.BoundaryClearance - opts.Tolerance);
+        case 'outside'
+            keepMask = phi <= (opts.Tolerance - opts.BoundaryClearance);
         otherwise
             error('kp:nodes:BadKeepMode', 'Keep must be ''inside'' or ''outside''.');
     end
