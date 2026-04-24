@@ -41,7 +41,9 @@ classdef FDODiffOp < handle
             activeSet(activeRows) = true;
 
             useBoundary = ~isempty(opts.NeuCoeff) || ~isempty(opts.DirCoeff);
-            loc_lim = max(1, floor(opProps.OverlapLoad * stProps.n));
+            % KernelPack uses a fixed half-stencil acceptance neighborhood
+            % for the overlapped path.
+            loc_lim = max(1, floor(0.5 * stProps.n));
             rowToLocal = containers.Map('KeyType', 'double', 'ValueType', 'double');
             for k = 1:size(centerPoints, 1)
                 rowToLocal(centerColGlobals(k)) = k;
@@ -101,6 +103,7 @@ classdef FDODiffOp < handle
                 nat0 = native(1);
 
                 acceptedAny = false;
+                acceptedGlobals = zeros(0, 1);
                 for j = 1:min(loc_lim, numel(indices))
                     candidateColGlobal = stencilGlobals(indices(j));
                     if ~isKey(rowToLocal, candidateColGlobal)
@@ -119,6 +122,7 @@ classdef FDODiffOp < handle
                         cursor = cursor + 1;
                     end
                     activeSet(candidateLocal) = false;
+                    acceptedGlobals(end+1, 1) = candidateColGlobal; %#ok<AGROW>
                     acceptedAny = true;
                 end
 
@@ -129,7 +133,10 @@ classdef FDODiffOp < handle
                 obj.recorded_stencil_centers{end+1,1} = centerPoint; %#ok<AGROW>
                 obj.recorded_stencil_globals(end+1,1) = centerColGlobals(localCenter); %#ok<AGROW>
                 if opProps.recordStencils
-                    obj.stencils{end+1,1} = struct('Approx', stencil, 'Indices', stencilGlobals(indices)); %#ok<AGROW>
+                    obj.stencils{end+1,1} = struct( ...
+                        'Approx', stencil, ...
+                        'Indices', stencilGlobals(indices), ...
+                        'AcceptedGlobals', acceptedGlobals); %#ok<AGROW>
                 end
             end
 

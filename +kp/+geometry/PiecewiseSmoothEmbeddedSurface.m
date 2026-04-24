@@ -219,7 +219,7 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
                 return;
             end
 
-            D = kp.geometry.distanceMatrix(X, X);
+            searcher = buildSearcher(X);
             visited = false(n, 1);
             Xkeep = zeros(n, size(X, 2));
             Nkeep = zeros(n, size(N, 2));
@@ -233,7 +233,7 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
                 end
                 % Merge a duplicate cluster into one representative point,
                 % while aligning normals before averaging them.
-                cluster = find(D(i, :) <= tol);
+                cluster = rangeQueryIndices(searcher, X, X(i, :), tol);
                 visited(cluster) = true;
                 outCount = outCount + 1;
                 Xkeep(outCount, :) = mean(X(cluster, :), 1);
@@ -281,7 +281,7 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
 
             % After duplicate cleanup, do a conservative spacing pass on
             % the assembled cloud. Corner-tagged points get priority.
-            D = kp.geometry.distanceMatrix(X, X);
+            searcher = buildSearcher(X);
             keep = true(n, 1);
             cornerMask = cornerFlags(:) ~= 0;
             order = [(find(cornerMask)).' (find(~cornerMask)).'];
@@ -291,11 +291,13 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
                 if ~keep(idx)
                     continue;
                 end
-                nbrs = find((D(idx, :) < spacingTol) & (D(idx, :) > 0));
+                nbrs = rangeQueryIndices(searcher, X, X(idx, :), spacingTol);
+                nbrs = nbrs(nbrs ~= idx);
                 if isempty(nbrs)
                     continue;
                 end
-                for j = nbrs
+                for jj = 1:numel(nbrs)
+                    j = nbrs(jj);
                     if ~keep(j)
                         continue;
                     end
@@ -321,10 +323,9 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
             if n == 0 || neighborhood <= 1
                 return;
             end
-            D = kp.geometry.distanceMatrix(X, X);
+            searcher = buildSearcher(X);
             for i = 1:n
-                [~, order] = sort(D(i, :), 'ascend');
-                take = order(1:min(neighborhood, n));
+                take = knnQueryIndices(searcher, X, X(i, :), min(neighborhood, n));
                 nri = NrmlsIn(take, :);
                 nref = nri(1, :);
                 for j = 2:size(nri, 1)
@@ -369,4 +370,35 @@ classdef PiecewiseSmoothEmbeddedSurface < handle
             end
         end
     end
+end
+
+function searcher = buildSearcher(X)
+searcher = [];
+if isempty(X)
+    return;
+end
+if exist('KDTreeSearcher', 'class') == 8 && exist('rangesearch', 'file') == 2
+    searcher = KDTreeSearcher(X);
+end
+end
+
+function idx = rangeQueryIndices(searcher, X, xq, radius)
+if ~isempty(searcher)
+    idxCell = rangesearch(searcher, xq, radius);
+    idx = idxCell{1}(:);
+else
+    d = sqrt(sum((X - xq).^2, 2));
+    idx = find(d <= radius);
+end
+end
+
+function idx = knnQueryIndices(searcher, X, xq, k)
+if ~isempty(searcher)
+    idx = knnsearch(searcher, xq, 'K', k);
+    idx = idx(:);
+else
+    d = sqrt(sum((X - xq).^2, 2));
+    [~, order] = sort(d, 'ascend');
+    idx = order(1:k);
+end
 end

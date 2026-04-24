@@ -1,20 +1,27 @@
 function Xe = buildPlanarParametricEvalNodes2D(interpNodes, N)
-%BUILDPLANARPARAMETRICEVALNODES2D Grid-like evaluation nodes in a projected hull.
+%BUILDPLANARPARAMETRICEVALNODES2D Poisson evaluation nodes inside a projected hull.
 
 [X, ~, ~] = kp.geometry.projectToBestFitPlane(interpNodes);
 x0 = min(X(:, 1));
 xm = max(X(:, 1));
 y0 = min(X(:, 2));
 ym = max(X(:, 2));
+w = max(abs(xm - x0), 1e-12);
+h = max(abs(ym - y0), 1e-12);
+radius = sqrt((w * h) / max(2 * N, 1));
 
-m = max(4, ceil(sqrt(max(2 * N, 4))));
-[xx, yy] = meshgrid(linspace(x0, xm, m), linspace(y0, ym, m));
-P = [xx(:), yy(:)];
-inside = kp.geometry.pointsInConvexHull2D(P, X);
-Xe = P(inside, :);
+Xe = zeros(0, 2);
+for attempt = 0:4
+    samples = kp.nodes.generatePoissonNodesInBox(radius, [x0, y0], [xm, ym], ...
+        'UseParallel', false, 'Seed', attempt);
+    if ~isempty(samples)
+        Xe = samples(kp.geometry.pointsInConvexHull2D(samples, X), :);
+    else
+        Xe = zeros(0, 2);
+    end
 
-if size(Xe, 1) > N
-    idx = round(linspace(1, size(Xe, 1), N));
-    Xe = Xe(idx, :);
+    if size(Xe, 1) >= max(1, floor(N / 2)) || attempt == 4
+        break;
+    end
+    radius = 0.85 * radius;
 end
-

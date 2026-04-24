@@ -168,6 +168,7 @@ classdef EmbeddedSurface < handle
                 obj.uniform_Nrmls = obj.Nrmls;
                 [~, ~, dn] = obj.evalClosedSurfaceFrame(uv);
                 obj.data_site_nrmls = dn;
+                obj.orientClosedSurfaceNormalsOutward();
             else
                 error('EmbeddedSurface:BadDimension', 'Unsupported dimension.');
             end
@@ -271,10 +272,23 @@ classdef EmbeddedSurface < handle
                 end
                 ptss = obj.evalOpenSurface(uvEval);
                 [tan1S, tan2S, nrmlS] = obj.evalOpenSurfaceFrame(uvEval);
-                obj.sample_sites = ptss;
-                obj.tangents1 = tan1S;
-                obj.tangents2 = tan2S;
-                obj.Nrmls = nrmlS;
+                if method == 1
+                    keep = kp.geometry.weightedSampleEliminationMIS(ptss, rad);
+                    keep = obj.ensureNonemptyKeep(keep, size(ptss, 1));
+                    obj.sample_sites_s = ptss;
+                    obj.tangents1_s = tan1S;
+                    obj.tangents2_s = tan2S;
+                    obj.Nrmls_s = nrmlS;
+                    obj.sample_sites = ptss(keep, :);
+                    obj.tangents1 = tan1S(keep, :);
+                    obj.tangents2 = tan2S(keep, :);
+                    obj.Nrmls = nrmlS(keep, :);
+                else
+                    obj.sample_sites = ptss;
+                    obj.tangents1 = tan1S;
+                    obj.tangents2 = tan2S;
+                    obj.Nrmls = nrmlS;
+                end
                 obj.uniform_sample_sites = obj.sample_sites;
                 obj.uniform_Nrmls = obj.Nrmls;
                 [~, ~, dn] = obj.evalOpenSurfaceFrame(uv);
@@ -413,6 +427,21 @@ classdef EmbeddedSurface < handle
             dX = diff(X, 1, 1);
             L = sum(sqrt(sum(dX .^ 2, 2)));
         end
+
+        function orientClosedSurfaceNormalsOutward(obj)
+            if isempty(obj.sample_sites) || size(obj.sample_sites, 2) ~= 3
+                return;
+            end
+
+            center = mean(obj.sample_sites, 1);
+            orientation = mean(sum((obj.sample_sites - center) .* obj.Nrmls, 2), 'omitnan');
+            if orientation < 0
+                obj.Nrmls = -obj.Nrmls;
+                obj.uniform_Nrmls = -obj.uniform_Nrmls;
+                obj.Nrmls_s = -obj.Nrmls_s;
+                obj.data_site_nrmls = -obj.data_site_nrmls;
+            end
+        end
     end
 
     methods (Access = private)
@@ -480,23 +509,24 @@ classdef EmbeddedSurface < handle
         end
 
         function [tu, tv, n] = evalClosedSurfaceFrame(obj, uv)
-            % Use chart derivatives in the two angular directions to
-            % recover tangent vectors and normals on the smooth surface.
-            h = obj.tangent_step;
-            uvUp = uv; uvUm = uv;
-            uvUp(:, 1) = uv(:, 1) + h;
-            uvUm(:, 1) = uv(:, 1) - h;
-            xp = obj.evalClosedSurface(uvUp);
-            xm = obj.evalClosedSurface(uvUm);
-            tu = (xp - xm) ./ (2 * h);
-
-            uvVp = uv; uvVm = uv;
-            uvVp(:, 2) = min(uv(:, 2) + h, pi/2);
-            uvVm(:, 2) = max(uv(:, 2) - h, -pi/2);
-            xp = obj.evalClosedSurface(uvVp);
-            xm = obj.evalClosedSurface(uvVm);
-            dv = max(uvVp(:, 2) - uvVm(:, 2), eps);
-            tv = (xp - xm) ./ dv;
+            % Differentiate the spherical-basis surface fit analytically
+            % rather than using finite differences in parameter space.
+            unitQuery = [cos(uv(:, 2)) .* cos(uv(:, 1)), ...
+                         cos(uv(:, 2)) .* sin(uv(:, 1)), ...
+                         sin(uv(:, 2))];
+            du = [-cos(uv(:, 2)) .* sin(uv(:, 1)), ...
+                   cos(uv(:, 2)) .* cos(uv(:, 1)), ...
+                   zeros(size(uv, 1), 1)];
+            dv = [-sin(uv(:, 2)) .* cos(uv(:, 1)), ...
+                  -sin(uv(:, 2)) .* sin(uv(:, 1)), ...
+                   cos(uv(:, 2))];
+            diff = kp.geometry.RBFLevelSet.differenceTensor(unitQuery, obj.geom_model.unitCenters);
+            r = sqrt(sum(diff.^2, 3));
+            phiFactor = kp.geometry.RBFLevelSet.radialDerivativeFactor(r, obj.geom_model.degree);
+            dotDu = diff(:, :, 1) .* du(:, 1) + diff(:, :, 2) .* du(:, 2) + diff(:, :, 3) .* du(:, 3);
+            dotDv = diff(:, :, 1) .* dv(:, 1) + diff(:, :, 2) .* dv(:, 2) + diff(:, :, 3) .* dv(:, 3);
+            tu = (phiFactor .* dotDu) * obj.geom_model.weights;
+            tv = (phiFactor .* dotDv) * obj.geom_model.weights;
             n = kp.geometry.normalizeRows(cross(tu, tv, 2));
         end
 

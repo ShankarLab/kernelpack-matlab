@@ -7,26 +7,28 @@ if n == 0
     return;
 end
 
-D = kp.geometry.distanceMatrix(X, X);
+searcher = buildSearcher(X);
 weights = zeros(n, 1);
 conflictNeighbors = cell(n, 1);
 useParfor = localShouldUseParfor(n);
 
 if useParfor
     parfor i = 1:n
-        di = D(i, :);
-        weightNeighbors = (di <= 2 * h) & (di > 0);
-        c = min(di(weightNeighbors), 2 * h);
+        [weightIdx, weightDist] = rangeQuery(searcher, X, X(i, :), 2 * h);
+        maskWeight = weightIdx ~= i;
+        c = min(weightDist(maskWeight), 2 * h);
         weights(i) = sum((1 - c ./ (2 * h)).^8);
-        conflictNeighbors{i} = find((di <= h) & (di > 0));
+        [conflictIdx, ~] = rangeQuery(searcher, X, X(i, :), h);
+        conflictNeighbors{i} = conflictIdx(conflictIdx ~= i);
     end
 else
     for i = 1:n
-        di = D(i, :);
-        weightNeighbors = (di <= 2 * h) & (di > 0);
-        c = min(di(weightNeighbors), 2 * h);
+        [weightIdx, weightDist] = rangeQuery(searcher, X, X(i, :), 2 * h);
+        maskWeight = weightIdx ~= i;
+        c = min(weightDist(maskWeight), 2 * h);
         weights(i) = sum((1 - c ./ (2 * h)).^8);
-        conflictNeighbors{i} = find(di <= h & di > 0);
+        [conflictIdx, ~] = rangeQuery(searcher, X, X(i, :), h);
+        conflictNeighbors{i} = conflictIdx(conflictIdx ~= i);
     end
 end
 
@@ -100,3 +102,20 @@ if ~license('test', 'Distrib_Computing_Toolbox')
     return;
 end
 tf = true;
+
+function searcher = buildSearcher(X)
+searcher = [];
+if exist('KDTreeSearcher', 'class') == 8 && exist('rangesearch', 'file') == 2
+    searcher = KDTreeSearcher(X);
+end
+
+function [idx, dist] = rangeQuery(searcher, X, xq, radius)
+if ~isempty(searcher)
+    [idxCell, distCell] = rangesearch(searcher, xq, radius);
+    idx = idxCell{1}(:);
+    dist = distCell{1}(:);
+else
+    d = sqrt(sum((X - xq).^2, 2));
+    idx = find(d <= radius);
+    dist = d(idx);
+end

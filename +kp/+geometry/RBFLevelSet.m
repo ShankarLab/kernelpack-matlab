@@ -15,9 +15,11 @@ classdef RBFLevelSet < handle
 
     properties (Access = private)
         Centers double = zeros(0, 0)
-        Values (:,1) double = zeros(0, 1)
-        Weights (:,1) double = zeros(0, 1)
+        RbfCoeffs double = zeros(0, 0)
         PolyCoeffs (:,1) double = zeros(0, 1)
+        ResidualWeights (:,1) double = zeros(0, 1)
+        ResidualConstant (1,1) double = 0
+        MonomialExponents double = zeros(0, 0)
     end
 
     methods
@@ -39,33 +41,43 @@ classdef RBFLevelSet < handle
             obj.n = size(x, 1);
             obj.ell = 1;
             obj.m_spline_degree = splineDegree;
-            obj.npoly = obj.dim + 1;
+            obj.ell = 2;
+            obj.MonomialExponents = kp.poly.total_degree_indices(obj.dim, obj.ell);
+            obj.npoly = size(obj.MonomialExponents, 1);
             obj.xd = x;
             obj.nrd = kp.geometry.normalizeRows(nr);
             obj.ls_xd = zeros(obj.n, 1);
+            obj.Centers = x;
 
-            % Build a signed offset cloud around the boundary and fit a
-            % scalar RBF interpolant through zero, inside, and outside
-            % level-set values.
-            sep = obj.estimateOffsetDistance(x);
-            insidePts = x - sep * obj.nrd;
-            outsidePts = x + sep * obj.nrd;
-
-            obj.Centers = [x; insidePts; outsidePts];
-            obj.Values = [zeros(obj.n, 1); -sep * ones(obj.n, 1); sep * ones(obj.n, 1)];
-
-            nCenters = size(obj.Centers, 1);
-            P = [ones(nCenters, 1), obj.Centers];
-            R = kp.geometry.distanceMatrix(obj.Centers, obj.Centers);
-            K = kp.geometry.phsKernel(R, obj.m_spline_degree);
-            reg = 1e-12 * max(1.0, max(abs(K), [], 'all'));
-            A = [K + reg * eye(nCenters), P; P.', zeros(obj.dim + 1, obj.dim + 1)];
-            rhs = [obj.Values; zeros(obj.dim + 1, 1)];
+            % KernelPack builds a curl-free interpolant to the surface
+            % normals, then extracts the discretely zero-mean potential.
+            cfA = kp.geometry.RBFLevelSet.buildCurlFreeGram(x, x, obj.m_spline_degree, true);
+            cfP = kp.geometry.RBFLevelSet.buildCurlFreePolynomialMatrix(x, obj.MonomialExponents);
+            reg = 1e-12 * max(1.0, max(abs(cfA), [], 'all'));
+            A = [cfA + reg * eye(size(cfA, 1)), cfP; cfP.', zeros(size(cfP, 2), size(cfP, 2))];
+            rhs = [obj.nrd(:); zeros(size(cfP, 2), 1)];
             coeffs = A \ rhs;
 
-            obj.Weights = coeffs(1:nCenters);
-            obj.PolyCoeffs = coeffs(nCenters + 1:end);
-            obj.mean_potential = mean(obj.Evaluate(x), 'all');
+            obj.RbfCoeffs = reshape(coeffs(1:obj.dim * obj.n), obj.n, obj.dim);
+            obj.PolyCoeffs = coeffs(obj.dim * obj.n + 1:end);
+            [obj.ResidualWeights, obj.ResidualConstant, pot] = ...
+                kp.geometry.RBFLevelSet.computeZeroMeanResidual( ...
+                    x, obj.RbfCoeffs, obj.PolyCoeffs, obj.MonomialExponents, obj.m_spline_degree);
+            obj.ls_xd = pot;
+            obj.mean_potential = mean(pot, 'all');
+
+            % Keep the sign convention aligned with KernelPack's geometry
+            % usage by making the inward normal offsets positive.
+            sep = obj.estimateOffsetDistance(x);
+            insideProbe = x - sep * obj.nrd;
+            if mean(obj.Evaluate(insideProbe), 'all') < 0
+                obj.RbfCoeffs = -obj.RbfCoeffs;
+                obj.PolyCoeffs = -obj.PolyCoeffs;
+                obj.ResidualWeights = -obj.ResidualWeights;
+                obj.ResidualConstant = -obj.ResidualConstant;
+                obj.ls_xd = -obj.ls_xd;
+                obj.mean_potential = -obj.mean_potential;
+            end
         end
 
         function val = Evaluate(obj, xe)
@@ -73,19 +85,7 @@ classdef RBFLevelSet < handle
         end
 
         function grad = EvaluateGradient(obj, xe)
-            % Differentiate the fitted scalar field analytically by
-            % differentiating the radial kernel.
-            nPts = size(xe, 1);
-            grad = zeros(nPts, obj.dim);
-            R = kp.geometry.distanceMatrix(xe, obj.Centers);
-            dphi = obj.m_spline_degree * R .^ max(obj.m_spline_degree - 2, 0);
-            invR = zeros(size(R));
-            mask = R > 0;
-            invR(mask) = 1 ./ R(mask);
-            for d = 1:obj.dim
-                delta = xe(:, d) - obj.Centers(:, d).';
-                grad(:, d) = (dphi .* delta .* invR) * obj.Weights + obj.PolyCoeffs(d + 1);
-            end
+            grad = kp.geometry.RBFLevelSet.evaluateModelGradient(obj.getEvaluationModel(), xe);
         end
 
         function result = ProjectToSurfaceNewton(obj, initialPoints, options)
@@ -162,8 +162,12 @@ classdef RBFLevelSet < handle
         function model = getEvaluationModel(obj)
             model = struct( ...
                 'Centers', obj.Centers, ...
-                'Weights', obj.Weights, ...
+                'RbfCoeffs', obj.RbfCoeffs, ...
                 'PolyCoeffs', obj.PolyCoeffs, ...
+                'ResidualWeights', obj.ResidualWeights, ...
+                'ResidualConstant', obj.ResidualConstant, ...
+                'MonomialExponents', obj.MonomialExponents, ...
+                'dim', obj.dim, ...
                 'm_spline_degree', obj.m_spline_degree, ...
                 'mean_potential', obj.mean_potential);
         end
@@ -171,8 +175,6 @@ classdef RBFLevelSet < handle
 
     methods (Access = private)
         function sep = estimateOffsetDistance(~, x)
-            % Pick an offset distance from the nearest-neighbor spacing so
-            % the inside/outside cloud scales with the data cloud.
             if size(x, 1) < 2
                 sep = 1e-2;
                 return;
@@ -201,9 +203,171 @@ classdef RBFLevelSet < handle
 
     methods (Static)
         function val = evaluateModel(model, xe)
-            R = kp.geometry.distanceMatrix(xe, model.Centers);
-            val = kp.geometry.phsKernel(R, model.m_spline_degree) * model.Weights + ...
-                [ones(size(xe, 1), 1), xe] * model.PolyCoeffs - model.mean_potential;
+            [val, ~] = kp.geometry.RBFLevelSet.evaluatePotentialPieces(model, xe);
+        end
+
+        function grad = evaluateModelGradient(model, xe)
+            % The zero-mean potential gradient is the negative curl-free
+            % field plus the scalar residual correction.
+            field = kp.geometry.RBFLevelSet.evaluateCurlFreeField(model, xe);
+            grad = -field;
+
+            diff = kp.geometry.RBFLevelSet.differenceTensor(xe, model.Centers);
+            r = sqrt(sum(diff.^2, 3));
+            resFactor = kp.geometry.RBFLevelSet.radialDerivativeFactor(r, 1);
+            for d = 1:model.dim
+                grad(:, d) = grad(:, d) + (resFactor .* diff(:, :, d)) * model.ResidualWeights;
+            end
+        end
+
+        function [field, flat] = evaluateCurlFreeField(model, xe)
+            gram = kp.geometry.RBFLevelSet.buildCurlFreeGram(xe, model.Centers, model.m_spline_degree, false);
+            poly = kp.geometry.RBFLevelSet.buildCurlFreePolynomialMatrix(xe, model.MonomialExponents);
+            flat = gram * model.RbfCoeffs(:) + poly * model.PolyCoeffs;
+            field = reshape(flat, size(xe, 1), model.dim);
+        end
+
+        function [value, rawPotential] = evaluatePotentialPieces(model, xe)
+            diff = kp.geometry.RBFLevelSet.differenceTensor(xe, model.Centers);
+            r = sqrt(sum(diff.^2, 3));
+            derivFactor = kp.geometry.RBFLevelSet.radialDerivativeFactor(r, model.m_spline_degree);
+            rawPotential = zeros(size(xe, 1), 1);
+            for d = 1:model.dim
+                rawPotential = rawPotential - (derivFactor .* diff(:, :, d)) * model.RbfCoeffs(:, d);
+            end
+
+            monomials = kp.geometry.RBFLevelSet.evaluateMonomials(xe, model.MonomialExponents);
+            if ~isempty(monomials)
+                rawPotential = rawPotential + monomials(:, 2:end) * model.PolyCoeffs;
+            end
+
+            residual = r * model.ResidualWeights + model.ResidualConstant;
+            value = -(rawPotential - residual);
+        end
+
+        function gram = buildCurlFreeGram(X, Y, splineDegree, xEqualsY)
+            nX = size(X, 1);
+            nY = size(Y, 1);
+            dim = size(X, 2);
+            diff = kp.geometry.RBFLevelSet.differenceTensor(X, Y);
+            r2 = sum(diff.^2, 3);
+            r = sqrt(r2);
+            gram = zeros(dim * nX, dim * nY);
+            p = splineDegree;
+
+            diagFactor = p * r .^ max(p - 2, 0);
+            offFactor = p * max(p - 2, 0) * r .^ max(p - 4, 0);
+
+            if p < 2
+                diagFactor = zeros(size(r));
+            end
+            if p < 4
+                offFactor = zeros(size(r));
+            end
+
+            zeroMask = r == 0;
+            diagFactor(zeroMask) = 0;
+            offFactor(zeroMask) = 0;
+
+            for rowDim = 1:dim
+                rowSpan = (rowDim - 1) * nX + (1:nX);
+                for colDim = 1:dim
+                    colSpan = (colDim - 1) * nY + (1:nY);
+                    block = offFactor .* diff(:, :, rowDim) .* diff(:, :, colDim);
+                    if rowDim == colDim
+                        block = block + diagFactor;
+                    end
+                    gram(rowSpan, colSpan) = -block;
+                end
+            end
+
+            if xEqualsY
+                gram(1:size(gram, 1)+1:end) = 0;
+            end
+        end
+
+        function poly = buildCurlFreePolynomialMatrix(X, exponents)
+            dim = size(X, 2);
+            monomials = kp.geometry.RBFLevelSet.evaluateMonomials(X, exponents);
+            monomials = monomials(:, 2:end);
+            nTerms = size(monomials, 2);
+            poly = zeros(dim * size(X, 1), nTerms);
+            for d = 1:dim
+                deriv = kp.geometry.RBFLevelSet.evaluateMonomialDerivatives(X, exponents, d);
+                deriv = deriv(:, 2:end);
+                rows = (d - 1) * size(X, 1) + (1:size(X, 1));
+                poly(rows, :) = deriv;
+            end
+        end
+
+        function [resWeights, resConstant, pot] = computeZeroMeanResidual(X, rbfCoeffs, polyCoeffs, exponents, splineDegree)
+            model = struct( ...
+                'Centers', X, ...
+                'RbfCoeffs', rbfCoeffs, ...
+                'PolyCoeffs', polyCoeffs, ...
+                'ResidualWeights', zeros(size(X, 1), 1), ...
+                'ResidualConstant', 0, ...
+                'MonomialExponents', exponents, ...
+                'dim', size(X, 2), ...
+                'm_spline_degree', splineDegree, ...
+                'mean_potential', 0);
+            [~, pot] = kp.geometry.RBFLevelSet.evaluatePotentialPieces(model, X);
+            r = kp.geometry.distanceMatrix(X, X);
+            A = [r, ones(size(X, 1), 1); ones(1, size(X, 1)), 0];
+            rhs = [pot; 0];
+            coeffs = A \ rhs;
+            resWeights = coeffs(1:size(X, 1));
+            resConstant = coeffs(end);
+        end
+
+        function tensor = differenceTensor(X, Y)
+            tensor = zeros(size(X, 1), size(Y, 1), size(X, 2));
+            for d = 1:size(X, 2)
+                tensor(:, :, d) = X(:, d) - Y(:, d).';
+            end
+        end
+
+        function monomials = evaluateMonomials(X, exponents)
+            monomials = ones(size(X, 1), size(exponents, 1));
+            for k = 1:size(exponents, 1)
+                for d = 1:size(X, 2)
+                    if exponents(k, d) ~= 0
+                        monomials(:, k) = monomials(:, k) .* (X(:, d) .^ exponents(k, d));
+                    end
+                end
+            end
+        end
+
+        function deriv = evaluateMonomialDerivatives(X, exponents, dimIndex)
+            deriv = zeros(size(X, 1), size(exponents, 1));
+            for k = 1:size(exponents, 1)
+                alpha = exponents(k, :);
+                if alpha(dimIndex) == 0
+                    continue;
+                end
+                term = alpha(dimIndex) * ones(size(X, 1), 1);
+                alpha(dimIndex) = alpha(dimIndex) - 1;
+                for d = 1:size(X, 2)
+                    if alpha(d) ~= 0
+                        term = term .* (X(:, d) .^ alpha(d));
+                    end
+                end
+                deriv(:, k) = term;
+            end
+        end
+
+        function factor = radialDerivativeFactor(r, degree)
+            factor = zeros(size(r));
+            if degree == 0
+                return;
+            end
+            if degree == 1
+                mask = r > 0;
+                factor(mask) = 1 ./ r(mask);
+                return;
+            end
+            factor = degree * r .^ (degree - 2);
+            factor(r == 0) = 0;
         end
     end
 end
