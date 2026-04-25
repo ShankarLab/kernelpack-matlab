@@ -902,7 +902,7 @@ sp.ell = max(xi + 1, 2);
 sp.npoly = size(kp.poly.total_degree_indices(dim, sp.ell), 1);
 sp.spline_degree = sp.ell;
 if mod(sp.spline_degree, 2) == 0
-    sp.spline_degree = sp.spline_degree + 1;
+    sp.spline_degree = sp.spline_degree - 1;
 end
 end
 
