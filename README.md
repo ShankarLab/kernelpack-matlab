@@ -556,14 +556,3 @@ This package contains the current fixed-domain solver layer:
 The solver layer is intentionally direct. It is built on top of
 `DomainDescriptor` and the `rbffd` assembly path rather than introducing a
 separate solver abstraction hierarchy.
-
-## Notes
-
-- This is a MATLAB implementation of the main KernelPack ingredients, not a
-  full one-to-one port of every C++ path.
-- Deterministic Poisson node generation now follows the current KernelPack
-  C++ behavior by using one canonical strip during deterministic runs.
-- Pure Neumann Poisson problems are solved with the usual nullspace
-  augmentation, so comparisons should be made after aligning the constant.
-- The repo includes both `RBFStencil` and `WeightedLeastSquaresStencil`, but
-  the strongest convergence results so far are on the RBF-FD path.
