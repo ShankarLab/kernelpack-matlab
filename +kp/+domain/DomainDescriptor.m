@@ -160,6 +160,7 @@ classdef DomainDescriptor < handle
         function out = getNumIntBdryNodes(obj), out = size(obj.X, 1); end
         function out = getNumInteriorNodes(obj), out = size(obj.Xi, 1); end
         function out = getNumBdryNodes(obj), out = size(obj.Xb, 1); end
+        function out = getNumGhostNodes(obj), out = size(obj.Xg, 1); end
     end
 
     methods (Access = private)

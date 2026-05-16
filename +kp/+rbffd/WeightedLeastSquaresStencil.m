@@ -80,6 +80,17 @@ classdef WeightedLeastSquaresStencil < handle
             end
         end
 
+        function W = ComputeWeightsAtPoints(obj, X, Xe, sp, op, ApplyOp)
+            obj.InitializeGeometry(X, sp);
+            if isempty(Xe)
+                W = zeros(obj.n, 0);
+                return;
+            end
+            Xec = (Xe - obj.Xm) / obj.width;
+            Bpoly = obj.applyOperator(ApplyOp, sp, op, [], Xe, X, Xec, obj.Xc);
+            W = obj.reconstructor.' * Bpoly;
+        end
+
         function values = EvalStencil(obj, sp, Xe, f, cache_flag)
             if nargin < 5
                 cache_flag = true;

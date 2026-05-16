@@ -131,6 +131,14 @@ classdef PUSLAdvectionSolver < handle
             out = obj.output_nodes;
         end
 
+        function out = getGlobalOutputNodes(obj)
+            out = obj.output_nodes;
+        end
+
+        function out = gatherOutputSamples(~, samples)
+            out = samples;
+        end
+
         function coeffs = projectInitial(obj, rho0)
             coeffs = obj.projectSamples(sampleScalarFunctionAtOutputNodes(obj, rho0));
         end
@@ -164,6 +172,56 @@ classdef PUSLAdvectionSolver < handle
                     'Localized PU evaluateAtPoints received coefficient matrix with wrong row count.');
             end
             values = localizedEvaluateCoefficients(obj, coeffs, X);
+        end
+
+        function values = backwardTraceEvaluateAtPoints(obj, t_start, num_steps, coeffs_old, Xq, velocity, rk)
+            validateBoundaryConditionConfiguration(obj);
+            if num_steps <= 0
+                error('kp:solvers:BadStepCount', ...
+                    'PUSLAdvectionSolver backward trace evaluation requires a positive step count.');
+            end
+            if size(Xq, 2) ~= size(obj.output_nodes, 2)
+                error('kp:solvers:BadPointDimension', ...
+                    'PUSLAdvectionSolver backward trace evaluation received points with the wrong dimension.');
+            end
+
+            bc = obj.boundary_condition;
+            if bc.mode == "inflow_dirichlet"
+                error('kp:solvers:BackwardTraceNoInflow', ...
+                    'PUSLAdvectionSolver backward trace evaluation does not inject inflow boundary data.');
+            end
+            if bc.mode == "tangential"
+                validateTangentialBoundaryFlow(obj, t_start, velocity);
+                validateTangentialBoundaryFlow(obj, t_start + num_steps * obj.dt, velocity);
+            end
+
+            Xdep = Xq;
+            for step = num_steps:-1:1
+                t_eval = t_start + step * obj.dt;
+                Xprev = Xdep;
+                Xdep = tracePointsBackward(Xdep, t_eval, obj.dt, velocity, rk);
+                if bc.mode == "periodic"
+                    error('kp:solvers:PeriodicNotYetSupported', ...
+                        'Periodic PU-SL transport is not yet supported in MATLAB.');
+                end
+                if ~isempty(obj.Domain.getOuterLevelSet())
+                    for i = 1:size(Xdep, 1)
+                        if isInsideLevelSetPoint(obj, Xdep(i, :))
+                            continue;
+                        end
+                        if bc.mode == "tangential"
+                            hit = boundaryHitOnSegment(obj, Xprev(i, :), Xdep(i, :));
+                            Xdep(i, :) = hit.point;
+                            continue;
+                        end
+                        if bc.mode == "unspecified"
+                            error('kp:solvers:BackwardOutsideDomain', ...
+                                'PUSL backward trace evaluation left the domain without an advection boundary condition.');
+                        end
+                    end
+                end
+            end
+            values = obj.evaluateAtPoints(coeffs_old, Xdep);
         end
 
         function coeffs_next = backwardSLStep(obj, tn, coeffs_old, velocity, rk)

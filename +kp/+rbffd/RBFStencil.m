@@ -75,6 +75,19 @@ classdef RBFStencil < handle
             end
         end
 
+        function W = ComputeWeightsAtPoints(obj, X, Xe, sp, op, ApplyOp)
+            obj.InitializeGeometry(X, sp);
+            if isempty(Xe)
+                W = zeros(obj.n, 0);
+                return;
+            end
+            r_rhs = kp.geometry.distanceMatrix(Xe, X);
+            Xec = (Xe - obj.Xm) / obj.width;
+            B = obj.applyOperator(ApplyOp, sp, op, r_rhs, Xe, X, Xec, obj.Xc);
+            Wfull = kp.rbffd.RBFStencil.stableSolve(obj.solve_lhs, B);
+            W = Wfull(1:obj.n, :);
+        end
+
         function values = EvalStencil(obj, sp, Xe, f, cache_flag)
             if nargin < 5
                 cache_flag = true;
