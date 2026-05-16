@@ -101,8 +101,8 @@ solver.init(dual, xi_u, velocity_sp, pressure_sp, dt, threads);
 solver.setTangentialFlowBoundary(1.0e-5);
 
 Xu = dual.getVelocityDomain().getIntBdryNodes();
-problem = kp.solvers.IncompressibleEulerSolver.defaultProblemDefinition();
-problem.slip_walls = {kp.solvers.IncompressibleEulerSolver.stationarySlipWall((1:dual.getVelocityDomain().getNumBdryNodes()).')};
+problem = kp.solvers.detail.IncompressibleEulerBDFBackend.defaultProblemDefinition();
+problem.slip_walls = {kp.solvers.detail.IncompressibleEulerBDFBackend.stationarySlipWall((1:dual.getVelocityDomain().getNumBdryNodes()).')};
 problem.gauge_options.mode = "forcepressuremean";
 
 u0 = velocity_exact(0.0, Xu);

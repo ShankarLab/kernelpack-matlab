@@ -25,6 +25,8 @@ prototype with, and extend.
   `PUSLFDAdvectionDiffusionSolver`, `PUSLPUAdvectionDiffusionSolver`,
   `PUSLFDAdvectionDiffusionReactionSolver`, and
   `PUSLPUAdvectionDiffusionReactionSolver`
+- Dual-domain PU-SL incompressible Euler stepping through
+  `PUSLIncompressibleEulerSolver`, backed by an internal Euler BDF backend
 
 The main packages live in:
 
@@ -50,6 +52,7 @@ The main packages live in:
 - PU diffusion stepping with BDF1, BDF2, and BDF3
 - Coupled PU-SL advection-diffusion with either FD or PU diffusion
 - Coupled PU-SL advection-diffusion-reaction with either FD or PU diffusion
+- Dual-domain incompressible Euler stepping with PU-SL velocity transport
 
 ## MIP install
 
@@ -110,6 +113,9 @@ Examples:
 - [`examples/pusl_pu_advection_diffusion_convergence_2d.m`](examples/pusl_pu_advection_diffusion_convergence_2d.m)
 - [`examples/pusl_fd_advection_diffusion_reaction_convergence_2d.m`](examples/pusl_fd_advection_diffusion_reaction_convergence_2d.m)
 - [`examples/pusl_pu_advection_diffusion_reaction_convergence_2d.m`](examples/pusl_pu_advection_diffusion_reaction_convergence_2d.m)
+- [`examples/pusl_incompressible_euler_example.m`](examples/pusl_incompressible_euler_example.m)
+- [`examples/pusl_incompressible_euler_convergence_2d.m`](examples/pusl_incompressible_euler_convergence_2d.m)
+- [`examples/pusl_incompressible_euler_convergence_2d_longtime.m`](examples/pusl_incompressible_euler_convergence_2d_longtime.m)
 - [`examples/poisson_convergence_2d.m`](examples/poisson_convergence_2d.m)
 - [`examples/poisson_convergence_2d_neumann.m`](examples/poisson_convergence_2d_neumann.m)
 - [`examples/poisson_convergence_3d.m`](examples/poisson_convergence_3d.m)
@@ -132,6 +138,7 @@ Checks:
 - [`tests/multispecies_pu_diffusion_checks.m`](tests/multispecies_pu_diffusion_checks.m)
 - [`tests/pusl_pu_advection_diffusion_checks.m`](tests/pusl_pu_advection_diffusion_checks.m)
 - [`tests/pusl_pu_advection_diffusion_reaction_checks.m`](tests/pusl_pu_advection_diffusion_reaction_checks.m)
+- [`tests/pusl_incompressible_euler_checks.m`](tests/pusl_incompressible_euler_checks.m)
 
 ## Quick examples
 
@@ -471,6 +478,141 @@ colorbar;
 
 arrayfun(@disableDefaultInteractivity, findall(fig, 'Type', 'axes'));
 exportgraphics(fig, fullfile('docs', 'images', 'readme_diffusion_stepping.png'), 'Resolution', 180);
+```
+
+### PU-SL incompressible Euler velocity field
+
+![PU-SL incompressible Euler velocity field](docs/images/readme_incompressible_euler_velocity.png)
+
+```matlab
+% Build a smooth unit-disk geometry.
+t = linspace(0, 2*pi, 512).';
+t(end) = [];
+boundary = [cos(t), sin(t)];
+
+surface = kp.geometry.EmbeddedSurface();
+surface.setDataSites(boundary);
+surface.buildClosedGeometricModelPS(2, 0.1, size(boundary, 1));
+surface.buildLevelSetFromGeometricModel([]);
+
+% Build coupled velocity and pressure node clouds from the same geometry.
+generator = kp.nodes.DualNodeDomainGenerator();
+generator.generateSmoothDomainNodesAutoPressure(surface, 0.1, 0.4, 31, ...
+    'Seed', 17, ...
+    'StripCount', 5, ...
+    'DoOuterRefinement', true, ...
+    'OuterFractionOfh', 0.75, ...
+    'OuterRefinementZoneSizeAsMultipleOfh', 2.0);
+dual = generator.createDualNodeDomainDescriptor();
+dual.buildStructs();
+
+% Choose velocity and pressure stencil orders separately.
+xi_u = 4;
+xi_p = 4;
+velocityStencil = localStencilProps(xi_u);
+pressureStencil = localStencilProps(xi_p);
+
+% Set up the PU-SL incompressible Euler stepper.
+dt = 0.02;
+solver = kp.solvers.PUSLIncompressibleEulerSolver();
+solver.init(dual, xi_u, velocityStencil, pressureStencil, dt, 1);
+solver.setTangentialFlowBoundary(1.0e-5);
+
+% Manufactured incompressible velocity field on the disk.
+Xu = dual.getVelocityDomain().getIntBdryNodes();
+amplitude = @(time) 1.0 + 0.2 * sin(2.0 * time) + 0.15 * cos(7.0 * time);
+velocityShape = @(X) [ ...
+    -((1.0 - sum(X.^2, 2)).^2 .* exp(0.25 * sum(X.^2, 2))) .* X(:,2), ...
+     ((1.0 - sum(X.^2, 2)).^2 .* exp(0.25 * sum(X.^2, 2))) .* X(:,1)];
+velocityExact = @(time, X) amplitude(time) * velocityShape(X);
+
+pressureExact = @(X) 0.25 * sin(2.0 * X(:,1) - X(:,2)) + 0.1 * X(:,1) .* X(:,2);
+
+forcing = @(time, X) localEulerForcing(time, X, amplitude, velocityShape);
+rk4 = @(time, X, dtStep, velocity) localRk4Step(time, X, dtStep, velocity);
+
+problem = kp.solvers.detail.IncompressibleEulerBDFBackend.defaultProblemDefinition();
+problem.slip_walls = {kp.solvers.detail.IncompressibleEulerBDFBackend.stationarySlipWall( ...
+    (1:dual.getVelocityDomain().getNumBdryNodes()).')};
+problem.gauge_options.mode = "forcepressuremean";
+
+% Advance the velocity state to the final time.
+solver.setInitialVelocity(velocityExact(0.0, Xu), problem);
+solver.bdf1Step(dt, rk4, forcing, problem);
+tFinal = 0.04;
+sol = solver.bdf2Step(tFinal, rk4, forcing, problem);
+
+% Align the pressure gauge and prepare simple MATLAB-style plots.
+Xp = dual.getPressureDomain().getIntBdryNodes();
+pExact = pressureExact(Xp);
+p = sol.pressure - mean(sol.pressure - pExact);
+triP = delaunay(Xp(:,1), Xp(:,2));
+arrowIdx = 1:4:size(Xu, 1);
+
+fig = figure('Color', 'w', 'Position', [100 100 1080 420]);
+tiledlayout(1, 2, 'Padding', 'compact', 'TileSpacing', 'compact');
+
+nexttile;
+plot(Xu(:,1), Xu(:,2), '.', 'MarkerSize', 8);
+hold on;
+quiver(Xu(arrowIdx,1), Xu(arrowIdx,2), sol.velocity(arrowIdx,1), sol.velocity(arrowIdx,2), 0, 'k', 'LineWidth', 0.8);
+axis equal;
+axis([-1 1 -1 1]);
+grid on;
+title('PU-SL Euler Velocity Field');
+
+nexttile;
+trisurf(triP, Xp(:,1), Xp(:,2), p, p, 'EdgeColor', 'none');
+shading interp;
+view(2);
+axis equal tight;
+grid on;
+title('Pressure Field');
+colorbar;
+
+arrayfun(@disableDefaultInteractivity, findall(fig, 'Type', 'axes'));
+exportgraphics(fig, fullfile('docs', 'images', 'readme_incompressible_euler_velocity.png'), 'Resolution', 180);
+
+function F = localEulerForcing(time, X, ampFun, shapeFun)
+amp = ampFun(time);
+ampDt = 0.4 * cos(2.0 * time) - 1.05 * sin(7.0 * time);
+F = ampDt * shapeFun(X);
+V = shapeFun(X);
+epsVal = 1.0e-6;
+Xpx = X; Xpx(:,1) = Xpx(:,1) + epsVal;
+Xmx = X; Xmx(:,1) = Xmx(:,1) - epsVal;
+Xpy = X; Xpy(:,2) = Xpy(:,2) + epsVal;
+Xmy = X; Xmy(:,2) = Xmy(:,2) - epsVal;
+dVdx = (shapeFun(Xpx) - shapeFun(Xmx)) / (2.0 * epsVal);
+dVdy = (shapeFun(Xpy) - shapeFun(Xmy)) / (2.0 * epsVal);
+F(:,1) = F(:,1) + amp * amp * (V(:,1) .* dVdx(:,1) + V(:,2) .* dVdy(:,1));
+F(:,2) = F(:,2) + amp * amp * (V(:,1) .* dVdx(:,2) + V(:,2) .* dVdy(:,2));
+phase = 2.0 * X(:,1) - X(:,2);
+F(:,1) = F(:,1) + 0.5 * cos(phase) + 0.1 * X(:,2);
+F(:,2) = F(:,2) - 0.25 * cos(phase) + 0.1 * X(:,1);
+end
+
+function Xnext = localRk4Step(time, X, dtStep, velocity)
+K1 = velocity(time, X);
+K2 = velocity(time + 0.5 * dtStep, X + 0.5 * dtStep * K1);
+K3 = velocity(time + 0.5 * dtStep, X + 0.5 * dtStep * K2);
+K4 = velocity(time + dtStep, X + dtStep * K3);
+Xnext = X + (dtStep / 6) * (K1 + 2 * K2 + 2 * K3 + K4);
+end
+
+function sp = localStencilProps(xi)
+sp = kp.rbffd.StencilProperties();
+sp.dim = 2;
+sp.ell = max(xi + 1, 2);
+sp.npoly = size(kp.poly.total_degree_indices(2, sp.ell), 1);
+sp.n = 2 * sp.npoly + 1;
+sp.spline_degree = max(sp.ell, 5);
+if mod(sp.spline_degree, 2) == 0
+    sp.spline_degree = sp.spline_degree - 1;
+end
+sp.treeMode = "interior_boundary";
+sp.pointSet = "interior_boundary";
+end
 ```
 
 ## Package tour

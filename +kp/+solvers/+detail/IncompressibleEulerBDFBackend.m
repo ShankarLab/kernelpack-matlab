@@ -1,5 +1,5 @@
-classdef IncompressibleEulerSolver < handle
-    %INCOMPRESSIBLEEULERSOLVER Single-process MATLAB analogue of KernelPack's Euler backend.
+classdef IncompressibleEulerBDFBackend < handle
+    %INCOMPRESSIBLEEULERBDFBACKEND MATLAB analogue of KernelPack's Euler BDF backend.
 
     properties
         Domain kp.domain.DualNodeDomainDescriptor = kp.domain.DualNodeDomainDescriptor()
@@ -29,7 +29,7 @@ classdef IncompressibleEulerSolver < handle
                 num_omp_threads = 1;
             end
             if ~(dt > 0)
-                error('kp:solvers:BadDt', 'IncompressibleEulerSolver requires dt > 0.');
+                error('kp:solvers:BadDt', 'IncompressibleEulerBDFBackend requires dt > 0.');
             end
             obj.Domain = dualDomain;
             obj.Domain.buildStructs();
@@ -57,7 +57,7 @@ classdef IncompressibleEulerSolver < handle
 
         function setStepSize(obj, dt)
             if ~(dt > 0)
-                error('kp:solvers:BadDt', 'IncompressibleEulerSolver requires dt > 0.');
+                error('kp:solvers:BadDt', 'IncompressibleEulerBDFBackend requires dt > 0.');
             end
             obj.dt = dt;
         end
@@ -94,21 +94,21 @@ classdef IncompressibleEulerSolver < handle
 
         function sol = bdf1Step(obj, forcing, problem)
             if isempty(obj.unm2)
-                error('kp:solvers:MissingHistory', 'IncompressibleEulerSolver::bdf1Step requires setInitialVelocity() first.');
+                error('kp:solvers:MissingHistory', 'IncompressibleEulerBDFBackend::bdf1Step requires setInitialVelocity() first.');
             end
             sol = obj.solveBdfStep(1.0, [1.0, 0.0, 0.0], forcing, problem);
         end
 
         function sol = bdf2Step(obj, forcing, problem)
             if obj.completed_steps_ < 1
-                error('kp:solvers:MissingHistory', 'IncompressibleEulerSolver::bdf2Step requires one prior step.');
+                error('kp:solvers:MissingHistory', 'IncompressibleEulerBDFBackend::bdf2Step requires one prior step.');
             end
             sol = obj.solveBdfStep(1.5, [2.0, -0.5, 0.0], forcing, problem);
         end
 
         function sol = bdf3Step(obj, forcing, problem)
             if obj.completed_steps_ < 2
-                error('kp:solvers:MissingHistory', 'IncompressibleEulerSolver::bdf3Step requires two prior steps.');
+                error('kp:solvers:MissingHistory', 'IncompressibleEulerBDFBackend::bdf3Step requires two prior steps.');
             end
             sol = obj.solveBdfStep(11.0 / 6.0, [3.0, -1.5, 1.0 / 3.0], forcing, problem);
         end
@@ -118,7 +118,7 @@ classdef IncompressibleEulerSolver < handle
         function bc = stationarySlipWall(boundary_indices)
             bc = struct();
             bc.boundary_indices = boundary_indices(:);
-            bc.normal_velocity = @(X, nr) zeros(size(X, 1), 1); %#ok<INUSD>
+            bc.normal_velocity = @(X, ~) zeros(size(X, 1), 1);
         end
 
         function problem = defaultProblemDefinition()
@@ -187,7 +187,7 @@ classdef IncompressibleEulerSolver < handle
             history_rhs = buildHistoryRhs(obj, historyCoeffs, 1.0 / alpha0);
             forcing_u = forcing(obj.Xphys);
             if ~isequal(size(forcing_u), size(obj.Xphys))
-                error('kp:solvers:BadForcing', 'IncompressibleEulerSolver forcing callback returned invalid data.');
+                error('kp:solvers:BadForcing', 'IncompressibleEulerBDFBackend forcing callback returned invalid data.');
             end
             forcing_u = (obj.dt / alpha0) * forcing_u;
             prepared = prepareWallData(obj, problem);
@@ -268,7 +268,7 @@ classdef IncompressibleEulerSolver < handle
             A = sparse(rows(1:cursor-1), cols(1:cursor-1), vals(1:cursor-1), totalRows, totalCols);
             x = gmresWithFallback(A, rhs, zeros(totalCols, 1));
             if any(~isfinite(x))
-                error('kp:solvers:BadSolve', 'IncompressibleEulerSolver solve returned non-finite values.');
+                error('kp:solvers:BadSolve', 'IncompressibleEulerBDFBackend solve returned non-finite values.');
             end
 
             velocity = zeros(Nphys, dim);
@@ -328,13 +328,13 @@ expectedRows = obj.VelocityPhysicalDomain.getNumIntBdryNodes();
 expectedCols = obj.Domain.getDim();
 if size(velocity, 1) ~= expectedRows || size(velocity, 2) ~= expectedCols || any(~isfinite(velocity), 'all')
     error('kp:solvers:BadVelocityState', ...
-        'IncompressibleEulerSolver::%s received an invalid velocity state.', caller);
+        'IncompressibleEulerBDFBackend::%s received an invalid velocity state.', caller);
 end
 end
 
 function problem = normalizeProblem(problem)
 if isempty(problem)
-    problem = kp.solvers.IncompressibleEulerSolver.defaultProblemDefinition();
+    problem = kp.solvers.detail.IncompressibleEulerBDFBackend.defaultProblemDefinition();
 end
 if ~isfield(problem, 'slip_walls')
     problem.slip_walls = {};
@@ -350,13 +350,13 @@ covered = zeros(Nub, 1);
 for k = 1:numel(problem.slip_walls)
     idx = problem.slip_walls{k}.boundary_indices(:);
     if any(idx < 1 | idx > Nub)
-        error('kp:solvers:BadSlipWall', 'IncompressibleEulerSolver boundary index out of range.');
+        error('kp:solvers:BadSlipWall', 'IncompressibleEulerBDFBackend boundary index out of range.');
     end
     covered(idx) = covered(idx) + 1;
 end
 if any(covered ~= 1)
     error('kp:solvers:BadSlipWallCover', ...
-        'IncompressibleEulerSolver slip walls must cover each boundary node exactly once.');
+        'IncompressibleEulerBDFBackend slip walls must cover each boundary node exactly once.');
 end
 end
 
@@ -374,7 +374,7 @@ for wallIdx = 1:numel(problem.slip_walls)
     v = v(:);
     if numel(v) ~= numel(idx) || any(~isfinite(v))
         error('kp:solvers:BadWallVelocity', ...
-            'IncompressibleEulerSolver slip wall callback returned invalid normal velocity data.');
+            'IncompressibleEulerBDFBackend slip wall callback returned invalid normal velocity data.');
     end
     prepared.boundary_normal_velocity(idx) = v;
 end

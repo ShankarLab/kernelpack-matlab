@@ -1,5 +1,5 @@
 classdef PUSLIncompressibleEulerSolver < handle
-    %PUSLINCOMPRESSIBLEEULERSOLVER PU-SL wrapper around the MATLAB Euler backend.
+    %PUSLINCOMPRESSIBLEEULERSOLVER PU-SL wrapper around the MATLAB Euler BDF backend.
 
     properties
         Domain kp.domain.DualNodeDomainDescriptor = kp.domain.DualNodeDomainDescriptor()
@@ -7,7 +7,7 @@ classdef PUSLIncompressibleEulerSolver < handle
         dt (1,1) double = 0
         num_omp_threads (1,1) double = 1
         Advection kp.solvers.PUSLAdvectionSolver = kp.solvers.PUSLAdvectionSolver()
-        Backend kp.solvers.IncompressibleEulerSolver = kp.solvers.IncompressibleEulerSolver()
+        Backend kp.solvers.detail.IncompressibleEulerBDFBackend = kp.solvers.detail.IncompressibleEulerBDFBackend()
         AdvectionDomain kp.domain.DomainDescriptor = kp.domain.DomainDescriptor()
         physical_nodes double = zeros(0, 0)
         global_physical_nodes double = zeros(0, 0)
@@ -77,7 +77,7 @@ classdef PUSLIncompressibleEulerSolver < handle
             obj.Backend.setStepSize(dt);
         end
 
-        function setInitialVelocity(obj, physical_velocity, problem)
+        function setInitialVelocity(obj, physical_velocity, ~)
             local_velocity = normalizeLocalPhysicalVelocity(obj, physical_velocity, 'setInitialVelocity');
             obj.coeff_nm2 = obj.Advection.projectSamples(local_velocity);
             obj.coeff_nm1 = zeros(0, size(local_velocity, 2));
@@ -87,9 +87,7 @@ classdef PUSLIncompressibleEulerSolver < handle
         end
 
         function setVelocityHistory(obj, varargin)
-            problem = varargin{end};
             velocities = varargin(1:end-1);
-            %#ok<NASGU>
             for k = 1:numel(velocities)
                 velocities{k} = normalizeLocalPhysicalVelocity(obj, velocities{k}, 'setVelocityHistory');
             end
