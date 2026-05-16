@@ -7,14 +7,12 @@ if isempty(Xq)
 end
 
 Xnodes = domain.getAllNodes();
-centers = patchData.centers;
 node_ids = patchData.node_ids;
 cachedStencils = patchData.stencils;
-radius = patchData.radius;
 dim = size(Xnodes, 2);
 num_targets = size(Xq, 1);
 num_all = size(Xnodes, 1);
-patch_ids_per_query = queryPatchIds(patchData, Xq, radius);
+[~, alphaMat] = kp.solvers.puQueryPatchWeights(patchData, Xq);
 
 parser = inputParser();
 parser.addParameter('Normals', zeros(num_targets, dim));
@@ -48,73 +46,41 @@ end
 rows = cell(num_targets, 1);
 cols = cell(num_targets, 1);
 vals = cell(num_targets, 1);
-for q = 1:num_targets
-    xq = Xq(q, :);
-    patch_ids = patch_ids_per_query{q};
-    center_dist = sqrt(sum((centers - xq).^2, 2));
-
-    alpha = puPatchWeight(center_dist(patch_ids) ./ radius);
-    alpha_sum = sum(alpha);
-    if alpha_sum <= 1.0e-14
-        alpha = ones(size(alpha));
-        alpha_sum = sum(alpha);
+patchStencilCache = cell(size(node_ids));
+for p = 1:numel(node_ids)
+    qIdx = find(alphaMat(:, p));
+    if isempty(qIdx)
+        continue;
     end
-    alpha = alpha / alpha_sum;
-
-    row = zeros(1, num_all);
-    for k = 1:numel(patch_ids)
-        p = patch_ids(k);
-        ids = node_ids{p};
-        if theta == 2
-            stencil = cachedStencils{p};
-        else
+    ids = node_ids{p};
+    if theta == 2
+        stencil = cachedStencils{p};
+    else
+        stencil = patchStencilCache{p};
+        if isempty(stencil)
             stencil = kp.rbffd.RBFStencil();
             stencil.InitializeGeometry(Xnodes(ids, :), sp);
+            patchStencilCache{p} = stencil;
         end
-        wloc = localOperatorWeights(stencil, ids, xq, sp, opName, normals(q, :), neuCoeff(q), dirCoeff(q));
-        row(ids) = row(ids) + alpha(k) * wloc;
     end
 
-    nz = find(abs(row) > 0);
-    rows{q} = q * ones(numel(nz), 1);
-    cols{q} = nz(:);
-    vals{q} = row(nz(:)).';
+    wloc = localOperatorWeightsBatch(stencil, ids, Xq(qIdx, :), sp, opName, normals(qIdx, :), neuCoeff(qIdx), dirCoeff(qIdx));
+    weighted = wloc .* full(alphaMat(qIdx, p));
+    [ii, jj, vv] = find(weighted);
+    for nzIdx = 1:numel(vv)
+        q = qIdx(ii(nzIdx));
+        rows{q}(end + 1, 1) = q;
+        cols{q}(end + 1, 1) = ids(jj(nzIdx));
+        vals{q}(end + 1, 1) = vv(nzIdx);
+    end
 end
 
 A = sparse(vertcat(rows{:}), vertcat(cols{:}), vertcat(vals{:}), num_targets, num_all);
 end
-
-function patch_ids_per_query = queryPatchIds(patchData, Xq, radius)
-tree = patchData.center_tree;
-centers = patchData.centers;
-if tree.HasSearcher
-    patch_ids_per_query = rangesearch(tree.Searcher, Xq, radius);
-else
-    D = kp.geometry.distanceMatrix(Xq, centers);
-    patch_ids_per_query = cell(size(Xq, 1), 1);
-    for q = 1:size(Xq, 1)
-        patch_ids_per_query{q} = find(D(q, :) < radius);
-    end
-end
-
-for q = 1:numel(patch_ids_per_query)
-    if isempty(patch_ids_per_query{q})
-        if isempty(centers)
-            continue;
-        end
-        d = sqrt(sum((centers - Xq(q, :)).^2, 2));
-        [~, nearest_patch] = min(d);
-        patch_ids_per_query{q} = nearest_patch;
-    else
-        patch_ids_per_query{q} = patch_ids_per_query{q}(:).';
-    end
-end
-end
-
-function w = localOperatorWeights(stencil, ids, xq, sp, opName, nr, neuCoeff, dirCoeff)
+function w = localOperatorWeightsBatch(stencil, ids, Xq, sp, opName, nr, neuCoeff, dirCoeff)
 Xloc = stencil.getStencilNodes();
-xc = (xq - stencil.getCentroid()) / stencil.getWidth();
-r = kp.geometry.distanceMatrix(xq, Xloc);
+xc = (Xq - stencil.getCentroid()) / stencil.getWidth();
+r = kp.geometry.distanceMatrix(Xq, Xloc);
 op = struct('nosolve', false, 'selectdim', 0);
 
 switch lower(string(opName))
@@ -122,9 +88,15 @@ switch lower(string(opName))
         Bpoly = stencil.basis.evaluate(xc, zeros(1, size(Xloc, 2)), true).';
         B = [phsRbf(r, sp.spline_degree).'; Bpoly];
     case {"lap", "laplacian"}
-        B = stencil.LapOp(sp, op, r, xq, Xloc, xc, stencil.getScaledStencilNodes());
+        B = stencil.LapOp(sp, op, r, Xq, Xloc, xc, stencil.getScaledStencilNodes());
     case {"bc", "boundary"}
-        B = stencil.BCOp(sp, op, neuCoeff, dirCoeff, r, xq, Xloc, xc, stencil.getScaledStencilNodes(), nr);
+        w = zeros(size(Xq, 1), numel(ids));
+        for q = 1:size(Xq, 1)
+            B = stencil.BCOp(sp, op, neuCoeff(q), dirCoeff(q), r(q, :), Xq(q, :), Xloc, xc(q, :), stencil.getScaledStencilNodes(), nr(q, :));
+            Wfull = stableSolve(stencil.solve_lhs, B);
+            w(q, :) = Wfull(1:numel(ids), :).';
+        end
+        return;
     otherwise
         error('kp:solvers:BadLocalOperator', 'Unknown local operator "%s".', string(opName));
 end
@@ -156,12 +128,4 @@ end
 function restoreWarnings(warnNear, warnSing)
 warning(warnNear.state, 'MATLAB:nearlySingularMatrix');
 warning(warnSing.state, 'MATLAB:singularMatrix');
-end
-
-function w = puPatchWeight(r)
-w = zeros(size(r));
-mask = r < 1;
-t = 1 - r(mask);
-rm = r(mask);
-w(mask) = t.^8 .* (32 * rm.^3 + 25 * rm.^2 + 8 * rm + 1);
 end

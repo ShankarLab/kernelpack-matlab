@@ -341,13 +341,11 @@ classdef RBFLevelSet < handle
 
         function poly = buildCurlFreePolynomialMatrix(X, exponents)
             dim = size(X, 2);
-            monomials = kp.geometry.RBFLevelSet.evaluateMonomials(X, exponents);
-            monomials = monomials(:, 2:end);
-            nTerms = size(monomials, 2);
+            derivs = kp.geometry.RBFLevelSet.evaluateMonomialDerivativesAll(X, exponents);
+            nTerms = size(exponents, 1) - 1;
             poly = zeros(dim * size(X, 1), nTerms);
             for d = 1:dim
-                deriv = kp.geometry.RBFLevelSet.evaluateMonomialDerivatives(X, exponents, d);
-                deriv = deriv(:, 2:end);
+                deriv = derivs(:, 2:end, d);
                 rows = (d - 1) * size(X, 1) + (1:size(X, 1));
                 poly(rows, :) = deriv;
             end
@@ -374,38 +372,44 @@ classdef RBFLevelSet < handle
         end
 
         function tensor = differenceTensor(X, Y)
-            tensor = zeros(size(X, 1), size(Y, 1), size(X, 2));
-            for d = 1:size(X, 2)
-                tensor(:, :, d) = X(:, d) - Y(:, d).';
-            end
+            tensor = reshape(X, size(X, 1), 1, size(X, 2)) - reshape(Y, 1, size(Y, 1), size(Y, 2));
         end
 
         function monomials = evaluateMonomials(X, exponents)
             monomials = ones(size(X, 1), size(exponents, 1));
-            for k = 1:size(exponents, 1)
-                for d = 1:size(X, 2)
-                    if exponents(k, d) ~= 0
-                        monomials(:, k) = monomials(:, k) .* (X(:, d) .^ exponents(k, d));
-                    end
+            for d = 1:size(X, 2)
+                if any(exponents(:, d) ~= 0)
+                    monomials = monomials .* bsxfun(@power, X(:, d), exponents(:, d).');
                 end
             end
         end
 
         function deriv = evaluateMonomialDerivatives(X, exponents, dimIndex)
-            deriv = zeros(size(X, 1), size(exponents, 1));
-            for k = 1:size(exponents, 1)
-                alpha = exponents(k, :);
-                if alpha(dimIndex) == 0
+            deriv = kp.geometry.RBFLevelSet.evaluateMonomialDerivativesAll(X, exponents);
+            deriv = deriv(:, :, dimIndex);
+        end
+
+        function deriv = evaluateMonomialDerivativesAll(X, exponents)
+            nX = size(X, 1);
+            nTerms = size(exponents, 1);
+            dim = size(X, 2);
+            deriv = zeros(nX, nTerms, dim);
+            for d = 1:dim
+                alpha = exponents;
+                coeff = alpha(:, d).';
+                active = coeff > 0;
+                if ~any(active)
                     continue;
                 end
-                term = alpha(dimIndex) * ones(size(X, 1), 1);
-                alpha(dimIndex) = alpha(dimIndex) - 1;
-                for d = 1:size(X, 2)
-                    if alpha(d) ~= 0
-                        term = term .* (X(:, d) .^ alpha(d));
+                alpha(active, d) = alpha(active, d) - 1;
+                term = ones(nX, nTerms);
+                for j = 1:dim
+                    if any(alpha(:, j) ~= 0)
+                        term = term .* bsxfun(@power, X(:, j), alpha(:, j).');
                     end
                 end
-                deriv(:, k) = term;
+                term(:, ~active) = 0;
+                deriv(:, :, d) = term .* coeff;
             end
         end
 

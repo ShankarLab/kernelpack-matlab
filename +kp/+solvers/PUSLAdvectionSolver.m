@@ -914,8 +914,11 @@ for p = 1:numel(node_ids)
     width = max(max(r, [], 'all'), 1);
     centroid = mean(nodes, 1);
     Xc = (nodes - centroid) / width;
-    poly_indices = kp.poly.total_degree_indices(size(nodes, 2), sp.ell);
-    P = monomialBasis(Xc, poly_indices);
+    poly_basis = kp.poly.PolynomialBasis.fromTotalDegree(size(nodes, 2), sp.ell, ...
+        'Family', 'legendre', ...
+        'Center', zeros(1, size(nodes, 2)), ...
+        'Scale', 1);
+    P = poly_basis.evaluate(Xc, zeros(1, size(nodes, 2)), true);
     solve_lhs = zeros(size(nodes, 1) + sp.npoly, size(nodes, 1) + sp.npoly);
     solve_lhs(1:size(nodes, 1), 1:size(nodes, 1)) = phsRbf(r, sp.spline_degree);
     solve_lhs(1:size(nodes, 1), size(nodes, 1)+1:end) = P;
@@ -925,7 +928,7 @@ for p = 1:numel(node_ids)
         'nodes', nodes, ...
         'centroid', centroid, ...
         'width', width, ...
-        'poly_indices', poly_indices, ...
+        'poly_basis', poly_basis, ...
         'solve_lhs', solve_lhs, ...
         'Q', Q, ...
         'R', R, ...
@@ -954,24 +957,16 @@ end
 nq = size(Xq, 1);
 nc = size(coeffs, 2);
 values = zeros(nq, nc);
- patch_ids_per_query = queryPatchIds(obj.patch_center_tree, obj.patch_centers, obj.patch_radii, Xq);
+[~, alphaMat] = queryPatchWeights(obj.patch_center_tree, obj.patch_centers, obj.patch_radii, Xq);
 
-for q = 1:nq
-    patch_ids = patch_ids_per_query{q};
-    center_dist = sqrt(sum((obj.patch_centers(patch_ids, :) - Xq(q, :)).^2, 2));
-    alpha = wendlandC6(center_dist ./ obj.patch_radii(patch_ids));
-    alpha_sum = sum(alpha);
-    if alpha_sum <= 1.0e-14
-        alpha = ones(size(alpha));
-        alpha_sum = sum(alpha);
+for p = 1:numel(obj.patch_node_ids)
+    qIdx = find(alphaMat(:, p));
+    if isempty(qIdx)
+        continue;
     end
-    alpha = alpha / alpha_sum;
-
-    for k = 1:numel(patch_ids)
-        p = patch_ids(k);
-        basis_row = localBasisRow(obj.patch_stencils{p}, obj.patch_stencil_props, Xq(q, :));
-        values(q, :) = values(q, :) + alpha(k) * (basis_row * coeffs(localCoeffRange(obj, p), :));
-    end
+    basis_rows = localBasisMatrix(obj.patch_stencils{p}, obj.patch_stencil_props, Xq(qIdx, :));
+    values(qIdx, :) = values(qIdx, :) + full(alphaMat(qIdx, p)) .* ...
+        (basis_rows * coeffs(localCoeffRange(obj, p), :));
 end
 end
 
@@ -993,39 +988,32 @@ end
 rows = cell(size(Xq, 1), 1);
 cols = cell(size(Xq, 1), 1);
 vals = cell(size(Xq, 1), 1);
-patch_ids_per_query = queryPatchIds(obj.patch_center_tree, obj.patch_centers, obj.patch_radii, Xq);
+[~, alphaMat] = queryPatchWeights(obj.patch_center_tree, obj.patch_centers, obj.patch_radii, Xq);
 
-for q = 1:size(Xq, 1)
-    patch_ids = patch_ids_per_query{q};
-    center_dist = sqrt(sum((obj.patch_centers(patch_ids, :) - Xq(q, :)).^2, 2));
-    alpha = wendlandC6(center_dist ./ obj.patch_radii(patch_ids));
-    alpha_sum = sum(alpha);
-    if alpha_sum <= 1.0e-14
-        alpha = ones(size(alpha));
-        alpha_sum = sum(alpha);
+for p = 1:numel(obj.patch_node_ids)
+    qIdx = find(alphaMat(:, p));
+    if isempty(qIdx)
+        continue;
     end
-    alpha = alpha / alpha_sum;
-
-    row = zeros(1, size(obj.output_nodes, 1));
-    for k = 1:numel(patch_ids)
-        p = patch_ids(k);
-        ids = obj.patch_node_ids{p};
-        basis_row = localBasisRow(obj.patch_stencils{p}, obj.patch_stencil_props, Xq(q, :));
-        row(ids) = row(ids) + alpha(k) * (basis_row * obj.forward_cardinal_coeffs{p});
+    ids = obj.patch_node_ids{p};
+    basis_rows = localBasisMatrix(obj.patch_stencils{p}, obj.patch_stencil_props, Xq(qIdx, :));
+    weighted = (basis_rows * obj.forward_cardinal_coeffs{p}) .* full(alphaMat(qIdx, p));
+    [ii, jj, vv] = find(abs(weighted) > 1.0e-14);
+    for nzIdx = 1:numel(vv)
+        q = qIdx(ii(nzIdx));
+        rows{q}(end + 1, 1) = q;
+        cols{q}(end + 1, 1) = ids(jj(nzIdx));
+        vals{q}(end + 1, 1) = weighted(ii(nzIdx), jj(nzIdx));
     end
-
-    nz = find(abs(row) > 1.0e-14);
-    rows{q} = q * ones(numel(nz), 1);
-    cols{q} = nz(:);
-    vals{q} = row(nz(:)).';
 end
 
 W = sparse(vertcat(rows{:}), vertcat(cols{:}), vertcat(vals{:}), size(Xq, 1), size(obj.output_nodes, 1));
 end
 
-function patch_ids_per_query = queryPatchIds(tree, centers, patch_radii, Xq)
+function [patch_ids_per_query, alphaMat] = queryPatchWeights(tree, centers, patch_radii, Xq)
 if isempty(centers)
     patch_ids_per_query = cell(size(Xq, 1), 1);
+    alphaMat = sparse(size(Xq, 1), 0);
     return;
 end
 max_radius = max(patch_radii);
@@ -1056,13 +1044,25 @@ for q = 1:numel(patch_ids_per_query)
         end
     end
 end
-end
 
-function basis_row = localBasisRow(stencil, sp, xq)
-re = kp.geometry.distanceMatrix(xq, stencil.nodes);
-Xec = (xq - stencil.centroid) / stencil.width;
-Pe = monomialBasis(Xec, stencil.poly_indices);
-basis_row = [phsRbf(re, sp.spline_degree), Pe];
+I = cell(size(Xq, 1), 1);
+J = cell(size(Xq, 1), 1);
+S = cell(size(Xq, 1), 1);
+for q = 1:numel(patch_ids_per_query)
+    patch_ids = patch_ids_per_query{q};
+    center_dist = sqrt(sum((centers(patch_ids, :) - Xq(q, :)).^2, 2));
+    alpha = wendlandC6(center_dist ./ patch_radii(patch_ids));
+    alpha_sum = sum(alpha);
+    if alpha_sum <= 1.0e-14
+        alpha = ones(size(alpha));
+        alpha_sum = sum(alpha);
+    end
+    alpha = alpha / alpha_sum;
+    I{q} = q * ones(numel(patch_ids), 1);
+    J{q} = patch_ids(:);
+    S{q} = alpha(:);
+end
+alphaMat = sparse(vertcat(I{:}), vertcat(J{:}), vertcat(S{:}), size(Xq, 1), size(centers, 1));
 end
 
 function coeffs = solveLocalCoeffs(obj, patch_id, sample_sites, sample_values)
@@ -1070,7 +1070,7 @@ stencil = obj.patch_stencils{patch_id};
 basis = localBasisMatrix(stencil, obj.patch_stencil_props, sample_sites);
 Xnodes = obj.output_nodes(obj.patch_node_ids{patch_id}, :);
 Xc = (Xnodes - stencil.centroid) / stencil.width;
-P = monomialBasis(Xc, stencil.poly_indices);
+P = stencil.poly_basis.evaluate(Xc, zeros(1, size(Xnodes, 2)), true);
 lhs = [basis; [P.', zeros(obj.patch_stencil_props.npoly, obj.patch_stencil_props.npoly)]];
 rhs = [sample_values; zeros(obj.patch_stencil_props.npoly, size(sample_values, 2))];
 fixed_sites = isequal(size(sample_sites), size(Xnodes)) && norm(sample_sites - Xnodes, inf) <= 1.0e-14;
@@ -1177,24 +1177,8 @@ if isempty(Xe)
 end
 re = kp.geometry.distanceMatrix(Xe, stencil.nodes);
 Xec = (Xe - stencil.centroid) / stencil.width;
-Pe = monomialBasis(Xec, stencil.poly_indices);
+Pe = stencil.poly_basis.evaluate(Xec, zeros(1, size(Xe, 2)), true);
 basis = [phsRbf(re, sp.spline_degree), Pe];
-end
-
-function P = monomialBasis(X, indices)
-if isempty(X)
-    P = zeros(0, size(indices, 1));
-    return;
-end
-P = ones(size(X, 1), size(indices, 1));
-for j = 1:size(indices, 1)
-    for d = 1:size(X, 2)
-        e = indices(j, d);
-        if e ~= 0
-            P(:, j) = P(:, j) .* (X(:, d) .^ e);
-        end
-    end
-end
 end
 
 function [constant_mode, patch_mass_rows, domain_measure] = precomputePatchMassData(obj)
@@ -1218,13 +1202,13 @@ for p = 1:numel(obj.patch_node_ids)
         if ~isInsideDomain(obj, x)
             continue;
         end
-        overlaps = queryPatchIds(obj.patch_center_tree, obj.patch_centers, obj.patch_radii, x);
+        [overlaps, ~] = queryPatchWeights(obj.patch_center_tree, obj.patch_centers, obj.patch_radii, x);
         overlaps = overlaps{1};
         w = normalizedPatchWeight(obj, p, overlaps, x);
         if w <= 0
             continue;
         end
-        basis_row = localBasisRow(obj.patch_stencils{p}, obj.patch_stencil_props, x).';
+        basis_row = localBasisMatrix(obj.patch_stencils{p}, obj.patch_stencil_props, x).';
         weight = quad.weights(q) * (radius ^ size(obj.output_nodes, 2)) * w;
         mass_row = mass_row + weight * basis_row;
         patch_measure = patch_measure + weight;
