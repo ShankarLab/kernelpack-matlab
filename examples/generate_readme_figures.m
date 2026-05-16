@@ -341,22 +341,40 @@ problem.gauge_options.mode = "forcepressuremean";
 solver.setInitialVelocity(eulerVelocityExact(0.0, Xu), problem);
 solver.bdf1Step(dt, @eulerRk4Step, @eulerForcing, problem);
 sol = solver.bdf2Step(tFinal, @eulerRk4Step, @eulerForcing, problem);
+uExact = eulerVelocityExact(tFinal, Xu);
 pExact = eulerPressureExact(Xp);
 p = sol.pressure - mean(sol.pressure - pExact);
 triP = delaunay(Xp(:, 1), Xp(:, 2));
-arrowIdx = 1:4:size(Xu, 1);
 
-fig = figure('Color', 'w', 'Position', [100 100 1120 430]);
-tiledlayout(1, 2, 'Padding', 'compact', 'TileSpacing', 'compact');
+fig = figure('Color', 'w', 'Position', [100 100 1120 860]);
+tiledlayout(2, 2, 'Padding', 'compact', 'TileSpacing', 'compact');
 
 nexttile;
 plot(Xu(:, 1), Xu(:, 2), '.', 'MarkerSize', 8);
 hold on;
-quiver(Xu(arrowIdx, 1), Xu(arrowIdx, 2), sol.velocity(arrowIdx, 1), sol.velocity(arrowIdx, 2), 0, 'k', 'LineWidth', 0.8);
+quiver(Xu(:, 1), Xu(:, 2), uExact(:, 1), uExact(:, 2), 0, 'k');
 axis equal;
 axis([-1 1 -1 1]);
 grid on;
-title('PU-SL Euler Velocity Field');
+title('Exact Velocity Field');
+
+nexttile;
+plot(Xu(:, 1), Xu(:, 2), '.', 'MarkerSize', 8);
+hold on;
+quiver(Xu(:, 1), Xu(:, 2), sol.velocity(:, 1), sol.velocity(:, 2), 0, 'k');
+axis equal;
+axis([-1 1 -1 1]);
+grid on;
+title('Numerical Velocity Field');
+
+nexttile;
+trisurf(triP, Xp(:, 1), Xp(:, 2), pExact, pExact, 'EdgeColor', 'none');
+shading interp;
+view(2);
+axis equal tight;
+grid on;
+title('Exact Pressure Field');
+colorbar;
 
 nexttile;
 trisurf(triP, Xp(:, 1), Xp(:, 2), p, p, 'EdgeColor', 'none');
@@ -364,7 +382,7 @@ shading interp;
 view(2);
 axis equal tight;
 grid on;
-title('Pressure Field');
+title('Numerical Pressure Field');
 colorbar;
 
 finalizeReadmeFigure(fig);

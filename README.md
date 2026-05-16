@@ -480,9 +480,9 @@ arrayfun(@disableDefaultInteractivity, findall(fig, 'Type', 'axes'));
 exportgraphics(fig, fullfile('docs', 'images', 'readme_diffusion_stepping.png'), 'Resolution', 180);
 ```
 
-### PU-SL incompressible Euler velocity field
+### Incompressible Euler on a disk
 
-![PU-SL incompressible Euler velocity field](docs/images/readme_incompressible_euler_velocity.png)
+![Incompressible Euler on a disk](docs/images/readme_incompressible_euler_velocity.png)
 
 ```matlab
 % Build a smooth unit-disk geometry.
@@ -512,7 +512,7 @@ xi_p = 4;
 velocityStencil = localStencilProps(xi_u);
 pressureStencil = localStencilProps(xi_p);
 
-% Set up the PU-SL incompressible Euler stepper.
+% Set up the PU-SL incompressible Euler stepper on the dual velocity-pressure cloud.
 dt = 0.02;
 solver = kp.solvers.PUSLIncompressibleEulerSolver();
 solver.init(dual, xi_u, velocityStencil, pressureStencil, dt, 1);
@@ -542,24 +542,42 @@ solver.bdf1Step(dt, rk4, forcing, problem);
 tFinal = 0.04;
 sol = solver.bdf2Step(tFinal, rk4, forcing, problem);
 
-% Align the pressure gauge and prepare simple MATLAB-style plots.
+% Compare exact and numerical velocity fields, then align the pressure gauge.
 Xp = dual.getPressureDomain().getIntBdryNodes();
+uExact = velocityExact(tFinal, Xu);
 pExact = pressureExact(Xp);
 p = sol.pressure - mean(sol.pressure - pExact);
 triP = delaunay(Xp(:,1), Xp(:,2));
-arrowIdx = 1:4:size(Xu, 1);
 
-fig = figure('Color', 'w', 'Position', [100 100 1080 420]);
-tiledlayout(1, 2, 'Padding', 'compact', 'TileSpacing', 'compact');
+fig = figure('Color', 'w', 'Position', [100 100 1080 820]);
+tiledlayout(2, 2, 'Padding', 'compact', 'TileSpacing', 'compact');
 
 nexttile;
 plot(Xu(:,1), Xu(:,2), '.', 'MarkerSize', 8);
 hold on;
-quiver(Xu(arrowIdx,1), Xu(arrowIdx,2), sol.velocity(arrowIdx,1), sol.velocity(arrowIdx,2), 0, 'k', 'LineWidth', 0.8);
+quiver(Xu(:,1), Xu(:,2), uExact(:,1), uExact(:,2), 0, 'k');
 axis equal;
 axis([-1 1 -1 1]);
 grid on;
-title('PU-SL Euler Velocity Field');
+title('Exact Velocity Field');
+
+nexttile;
+plot(Xu(:,1), Xu(:,2), '.', 'MarkerSize', 8);
+hold on;
+quiver(Xu(:,1), Xu(:,2), sol.velocity(:,1), sol.velocity(:,2), 0, 'k');
+axis equal;
+axis([-1 1 -1 1]);
+grid on;
+title('Numerical Velocity Field');
+
+nexttile;
+trisurf(triP, Xp(:,1), Xp(:,2), pExact, pExact, 'EdgeColor', 'none');
+shading interp;
+view(2);
+axis equal tight;
+grid on;
+title('Exact Pressure Field');
+colorbar;
 
 nexttile;
 trisurf(triP, Xp(:,1), Xp(:,2), p, p, 'EdgeColor', 'none');
@@ -567,7 +585,7 @@ shading interp;
 view(2);
 axis equal tight;
 grid on;
-title('Pressure Field');
+title('Numerical Pressure Field');
 colorbar;
 
 arrayfun(@disableDefaultInteractivity, findall(fig, 'Type', 'axes'));
